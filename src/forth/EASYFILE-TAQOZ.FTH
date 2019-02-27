@@ -4,6 +4,9 @@ TAQOZ
 
 pub EASYFILE.fth    ." P2 EASYFILE FAT32 SD FILE SYSTEM - 190101.0000 " ;
 
+
+: +POLL		keypoll W! ;
+
 --- create deallocation markers for reload
 \ DATPTR	:= efdat
 
