@@ -5,7 +5,7 @@ Tachyon Forth for the P2 BOOT ROM
 - [PETER'S DROPBOX TAQOZ](https://www.dropbox.com/sh/n979flsb9rjoclo/AADcza7EtHI7yXvZl4lzi4rra?dl=0)
 - [TAQOZ THREAD](https://forums.parallax.com/discussion/167868/taqoz-tachyon-forth-for-the-p2-boot-rom)
 - [TAQOZ DOCS](https://goo.gl/GSa9YC)
-- [TAQOZ GEM](gem.md)
+- [TAQOZ GEM](docs/gem.md)
 - [TACHYON FORTH NEWS](https://tachyonforthnews.blogspot.com/)
 - [TACHYON P2](http://forums.parallax.com/discussion/162381/tachyon-forth-for-p2-fat32-wiznet-now-smartpins-woot/p1)
 - [TACHYON INTRO](https://docs.google.com/document/d/1bEH0DfGmu99M1SqCbmlzl991Ssv2J5m6XWmkJX0XSl8/pub)
