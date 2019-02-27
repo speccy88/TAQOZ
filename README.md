@@ -1,7 +1,7 @@
 # TAQOZ
 Tachyon Forth for the P2 BOOT ROM
 
-- [TAQOZ INTRO](https://docs.google.com/document/d/1bEH0DfGmu99M1SqCbmlzl991Ssv2J5m6XWmkJX0XSl8/pub)
+- [TAQOZ INTRO](https://docs.google.com/document/d/e/2PACX-1vQKKl_A9gQ8VooCfrLOqw6a_rp9ddyAqiFeo1RopL2AtnHTaWIfvojYq-yfNlqoPD81a2EU1EJsQpRG/pub)
 - [PETER'S DROPBOX TAQOZ](https://www.dropbox.com/sh/n979flsb9rjoclo/AADcza7EtHI7yXvZl4lzi4rra?dl=0)
 - [TAQOZ THREAD](https://forums.parallax.com/discussion/167868/taqoz-tachyon-forth-for-the-p2-boot-rom)
 - [TAQOZ DOCS](https://goo.gl/GSa9YC)
