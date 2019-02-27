@@ -1,8 +1,8 @@
 CON
 
-XIN		= 20_000_000
+XIN		= 12_000_000
 xmode		= 3			' 2 for xtal, 3 for osc'
-CPUHZ		= 180_000_000		' desired CPU clock frequency'
+CPUHZ		= 120_000_000		' desired CPU clock frequency'
 baud_rate       = 115200		' console baud rate - timing value calculated at startup'
 
 CON
@@ -59,7 +59,6 @@ sd_di		= spi_di
 sd_do		= spi_do
 
 
-
 ' *** MEMORY MAP *** '
 
 ' DEBUG "REGISTERS" - set to high cog memory'
@@ -68,18 +67,18 @@ hr1		= $1EF
 xreg		= $1ED
 
 
-
 registers       = $0200           	'Variables used by kernel + general-purpose
-''		orgh	$0400		' hubexec can only be called from $400 onwards
 
-'codeorg         = $0800			' metacompiled threaded code space
 _hubrom		= $0400			' start of TAQOZ code'
 
 SDBUFS		= $10000		' allocate 4k for buffers
-rxbuffers       = $11000		' SERIAL RX buffer - 4k '
-  rxsize          = $1000
+rxbuffers       = $1C000		' SERIAL RX buffer
+  rxsize          = $4000
 datram		= $12000		' start of data memory - user variables '
-ramdict         = $14000                 ' dictionary can be moved elsewhere at runtime'
+
+' ^^^^^^^^^^ '
+' DICTIONARY '
+ramdict         = $0F400                 ' dictionary can be moved elsewhere at runtime'
 
 bmporg		= $30000		' start of bmp header, palette, and bitmap data '
 
@@ -87,13 +86,12 @@ flashpart	= $E0000
 flashpage	= flashpart>>16
 flashsig	= $FFFFC
 
+
+
+
 '************* VGA & KEYBOARD ************* '
 
-vgapins		= $03020100		' VRGBH pins '
-vspin		= 4			' vsynch pin'
 vgacog		= 7			' vga runs in this cog '
-
-kbpins		= $0607			' PS/2 CLK,DAT'
 
 DAT	' STAGE 1 - BOOT TIME INITIALIZATION '
 
@@ -114,11 +112,11 @@ _CLKCFG		long	CLKCFG		''$012C_B3FF $014CB3FC '
 
 '	*** SERIAL/VGA/KEYBOARD *** '
 _BAUD		long	baud_rate
-_VGACFG		long	vgapins			' VGA CONFIG '
-		long	vspin
+_VGACFG		long	$03020100		' VGA RGBH pins
+		long	4			' VSYNCH'
 _VGAINIT	long	@vgainit		' VGA code '
-_KBCFG		long	kbpins
-		long	0
+_VGASET		long	round(fset)
+_KBCFG		long	$0607			' PS/2 CLK,DAT'
 
 '	*** RESET VECTORS *** '
 _RESET		long	@RESET
@@ -132,6 +130,7 @@ _COG5		long	0
 _COG6		long	0
 _COG7		long	0
 
+' This code is jumped to from location 0 and follows after the boot parameters list
 
 initsys		hubset	#0				' SWITCH TO RCFAST'
 		mov	hr1,_CLKCFG
@@ -140,9 +139,9 @@ initsys		hubset	#0				' SWITCH TO RCFAST'
 		or	hr1,#xmode			' use PLL bits'
 		hubset	hr1
 		drvh	#tx_pin
-		tjz	_VGACFG,#$+2			' ignore VGA if no pins assigned (all zeros)
+		tjz	_VGACFG,#.L1 '$+2			' ignore VGA if no pins assigned (all zeros)
 		coginit #vgacog,_VGAINIT
-		tjz	_COG1,#$+2			' user specified startup code for cogs 1...7 '
+.L1		tjz	_COG1,#$+2			' user specified startup code for cogs 1...7 '
 		coginit	#1,_COG1
 		tjz	_COG2,#$+2
 		coginit	#2,_COG2
@@ -164,15 +163,21 @@ initsys		hubset	#0				' SWITCH TO RCFAST'
 '
 ' global variables located in first 1k of memory (10-bit literal)'
 '
+
 rxrd		word 0
 rxwr		word 0
 lastkey		word 0
+athen		word 0
 
 sdvars				' $00A4..$01AF'
 
 
 
-		orgh	_hubrom
+
+		orgh	_hubrom			' move '
+
+{
+DBIP		jmp	#DBPRINTA
 
 DBPRINTA
 		mov	xreg,PTRA
@@ -221,7 +226,7 @@ DBTX		'wxpin	##((cpuhz/115200)<<16)+7,#tx_pin
 	if_nc	jmp     #.l0
 		ret
 
-
+}
 
 InitTaqoz
 		rdlong	PTRA,#@_IDLE
@@ -290,9 +295,9 @@ CON
 CON
 
 
-	numpadsz        = 40            ' We really only need a large buffer for when long binary numbers with separators are used
+	numpadsz        = 44            ' We really only need a large buffer for when long binary numbers with separators are used
 	                                ' 26 digits for double number 18,446,744,073,709,551,615
-	wordsz          = 39            ' any word up to 37 characters (1 count, 1 terminator)
+	wordsz          = 44            ' any word including binary numbers up to n characters (1 count, 1 terminator)
 	tasksz          = 8             ' 8 bytes/task RUN[2] FLAG[1]
 
 	' fflags
@@ -313,20 +318,23 @@ CON
 	cntm    	= $1F           ' mask for nfa count byte to mask off atrs'
 
 	' Dictionary header attribute flags
-	pubatr  	= 0
-	priatr  	= 1
-	preatr  	= 2
-	modatr  	= 3
+	pubatr  	= 0		' normal public attribute
+	priatr  	= 1		' private - header can be reclaimed
+	preatr  	= 2		' preemptive - executes immediately
+	cliatr  	= 3		' command line interactive but compiles in definition
+
 	maxlen  	= 15
 
+'' attach these to count bytes in dictionary i.e. byte 2+im,"IF"
 	im      	= preatr<<6           'lexicon immediate bit
 	pr      	= priatr<<6           'private (flagged for removal from the dictionary)
+	cli		= cliatr<<6
 		' defs for TAQOZ '
 dat
 		orgh
 
 taqoz_version    	long    2_0
-taqoz_time		long	190112_2300
+taqoz_time		long	190212_1700
 taqoz_name		byte	"CHIP"	' use exactly 4 characters = 1 long'
 {
 
@@ -380,14 +388,15 @@ delim           res 2           ' the delimiter used in text input and a save lo
 dcnt		res 1
 prefix          res 1           ' NUMBER input prefix
 uprompt         res 2           ' pointer to code to execute when Forth prompts for a new line
-accept          res 2           ' pointer to code to execute when Forth accepts a line to interpret (0=ok)
+uaccept         res 2           ' pointer to code to execute when Forth accepts a line to interpret (0=ok)
+unum            res 2           ' User number processing routine - executed if number failed and UNUM <> 0
+ufind           res 2           ' runs extended dictionary search if set after failing precompiled dictionary search
+
 keychar         res 4           ' override for key character
 
 suffix          res 1           ' NUMBER input suffix
                 res 3
 
-unum            res 2           ' User number processing routine - executed if number failed and UNUM <> 0
-ufind           res 2           ' runs extended dictionary search if set after failing precompiled dictionary search
 
 
 '
@@ -397,7 +406,8 @@ ufind           res 2           ' runs extended dictionary search if set after f
 
 ' these 4 variables are cleared as an array of 10 bytes
 anumber         res 4           ' Assembled number from input
-bnumber         res 4
+hnumber		res 4		' high word of double number'
+bnumber         res 4		' part of IP notation number'
 digits          res 1           ' number of digits in current number that has just been processed
 dpl             res 1           ' Position of the decimal point if encountered (else zero)
 
@@ -406,30 +416,21 @@ dpl             res 1           ' Position of the decimal point if encountered (
 dmm             res 6           ' dump "fetch' vectors to allow dump to access special devices
 dmp             res 2           ' DUMP vector
 
-
 ''''''''''''''''''''''' fixed ''''''''''''''''''''''''''''
-
-'rxptr          res 4           ' Pointer to the terminal receive buffer - read & write index precedes
-'rxsz           res 2
 
 
 oldnames        res 4           ' backup of names used at start of TAQOZ load
 names           res 4           ' start of dictionary (builds down)
-
-
 fromhere        res 4           ' Used by TAQOZ word to backup current here to determine code size at end of load
 here            res 4           ' pointer to compilation area (overwrites VM image)
 codes           res 4           ' current code compilation pointer (updates "here" or is reset by it)
-
-'bootsig                res 4
-
 autovec         res 4           ' user autostart address if non-zero - called from within terminal
+''
 cold            res 2           ' pattern to detect if this is a cold or warm start ($A55A )
 errors          res 2
 linenum         res 2
-'lines          res 2
-
-prevch          res 2           ' used to detect LF only sequences vs CRLF to perform auto CR
+atrs		res 1
+prevch          res 1           ' used to detect LF only sequences vs CRLF to perform auto CR
 
 spincnt         res 2           ' Used by spinner to rotate busy symbol
                 res 2           ' word count
@@ -633,11 +634,13 @@ ACALL                   call    #POPX                   ' get wordcode into X
                         pop     R1                      ' discard return address and jump back and use interpreter
                         jmp     #doCODE
 
-STRLEN  ' ( str -- len )
+' TAQOZ# " HELLO WORLD!" LAP LEN$ LAP .LAP --- 200 cycles= 833ns @240MHz ok
+' LEN$ ( str -- len )
+STRLEN
                         rdfast  #0,tos
                         mov     tos,#0
-.L0                     rfbyte  R0              ' read a byte
-                        sub     R0,#1           ' end is either a null or anything >$7F
+.L0                     rfbyte  R0			' read a byte
+                        sub     R0,#1			' end is either a null or anything >$7F
                         cmp     R0,#$7E wc
         if_c            add     tos,#1
         if_c            jmp     #.L0
@@ -837,6 +840,11 @@ BITS9           _ret_   and     tos,#$1FF
 
 
 
+OP2                     rol     tos1,tos	' INSTRUCTION FIELD IS SUBSTITUTED BEFORE USING'
+                        jmp     #DROP
+
+
+
                         { *** COMPARISON *** }
 
 ' Basic instructions from which other comparison instructions are built from
@@ -994,7 +1002,7 @@ CFILL                   wrfast  tos1,tos2
                         rep     @.L0,tos1
                         wfbyte  tos
 .L0                     jmp     #DROP3
-
+{
 ' Test for non-zero data in memory block
 ' DATA? ( addr longs -- flg )
 DATAQ                   rdfast  #0,tos1
@@ -1003,7 +1011,7 @@ DATAQ                   rdfast  #0,tos1
                         or      ACC,fx
 .L0                     mov     tos1,ACC
                         jmp     #DROP
-
+}
 
 
 ' I ( -- index ) read the loop index
@@ -1141,7 +1149,7 @@ PUSHX           mov     ACC,#0          ' clear it for next operation
                 mov     tos2,tos1
                 mov     tos1,tos
                 mov     tos,fx          ' replace tos with X (DEFAULT)
-                add     depth,#1        ' the depth variable indexes bytes in LUT
+                add     depth,#1        ' the depth variable indexes data in LUT
         _ret_   modcz   0,0 wc 		' clear C for some operations that use this to determine behaviour
 
 
@@ -1212,6 +1220,9 @@ _WYPIN                  wypin   tos,pinreg
 ' RDPIN ( -- res )
 _RDPIN                  rdpin   fx,pinreg
                         jmp     #PUSHX
+_RDPINC                 rdpin   fx,pinreg wc
+		if_c	sub	acc,#1
+                        jmp     #PUSHACC
 
 ' RQPIN   D,S/# {WC}    - Get smart pin S/# result Z into D, flag into C, don't ack
 ' RQPIN ( -- res )
@@ -1270,6 +1281,17 @@ R                       testp   pinreg wc
                 if_c    sub     ACC,#1
                         jmp     #PUSHACC
 
+' MSBOUT ( data pin -- data*2 pin )
+MSBOUT			shl	tos1,#1 wc
+		_ret_	drvc	tos
+LSBOUT			shr	tos1,#1 wc
+		_ret_	drvc	tos
+LSBIN			testp	tos wc
+		_ret_	shl	tos1,#1 wc
+''			testp	tos wc
+''			rlc	tos1,#1 wc
+
+
 ' normal pin operations via stack
 
 ' HIGH ( pin -- )
@@ -1292,7 +1314,6 @@ M1                      long    -1
 SEROUT		mov	txpin,tos
 		jmp	#DROP
 
-
 CONEMIT		mov	r1,tos
 TXR1		mov	txpin,#tx_pin
                 wypin   r1,txpin             '..send byte
@@ -1305,21 +1326,24 @@ txpin		long	tx_pin
 
 '********************** SPI READ/WRITE *********************
 
-' 461.7us/512
-' SPI>BUF ( dst cnt -- sum )
+' Read bytes in from SPI to memory
+' SPI>BUF ( dst cnt -- sum ) 461.7us/512
 SPIRX           wrfast  #0,tos1
                 mov     tos1,#0
 .L0             rep     @.end,#8                ' 8 bits
                  outnot  sck                     ' clock (low high or low high)
-		 nop
+		 rcl     r1,#1                   ' shift in msb first
                  outnot  sck
+		 nop
                  testp   miso wc                 ' read data from card
-                 rcl     r1,#1                   ' shift in msb first
-.end            wfbyte  r1
-                add     tos1,r1
+.end
+		rcl     r1,#1                   ' shift in msb first
+                wfbyte  r1
                 djnz    tos,#.L0
                 jmp     #DROP
 
+
+' Read 32-bits from SPI'
 SPIRDL
                 rep     @sre1,#32
                 skip    #1
@@ -1327,14 +1351,16 @@ SPIRDL
 SPIRD
                 rep     @sre1,#8                ' 8 bits
                  outnot  sck                     ' clock (low high)
-		 nop
+RWAIT		 nop
                  outnot  sck
+		 nop
                  testp   miso wc                 ' read data from card
                  rcl     tos,#1                  ' shift in msb first
 sre1            ret
 
-' 474.6us/512
-' SPITX ( src bytes -- )
+
+' Write bytes from memory to SPI '
+' SPITX ( src bytes -- ) ' 474.6us/512
 SPITXE		drvl	ss
           	drvl    sck
 SPITX           rdfast  #0,tos1
@@ -1346,7 +1372,7 @@ SPITX           rdfast  #0,tos1
                 jmp     #DROP2
 
 
-' TRY CLOCKING ENABLED   C=1 in %CIOHHHLLL ?
+' SMARTPINS? TRY CLOCKING ENABLED   C=1 in %CIOHHHLLL ?
 
 ' Write SD Command
 SPIWRC		and     tos,#$3F
@@ -1363,7 +1389,7 @@ SPITX8		rep     @.L1,r1
                  rol     fx,#1 wc               ' output next msb
                  outc    mosi
                  outnot  sck                     ' clock
-		 nop
+WWAIT		 nop
                  outnot  sck                     ' clock
 .L1            ret
 
@@ -1379,6 +1405,8 @@ SPIWR16		shl	tos,#16
 
 SPICE  		drvh    ss
 	_ret_	drvh	sck			' P2 shares clock as ce with other boot devices'
+
+
 
 
 ' I2C support
@@ -1407,29 +1435,6 @@ LAP             mov     lap2,lap1
         _ret_   getct   lap1
 
 
-
-'''''''''''''' CORDIC '''''''''''''
-MULTIPLY                qmul    tos,tos1
-                        getqx   tos1
-                        jmp     #DROP
-
-' UM* ( u1 u2 -- u1*u2L u1*u2H )
-' DESC: unsigned 32bit * 32bit multiply -- 64bit result
-UMMUL                   qmul    tos,tos1
-                        getqx   tos1
-                _ret_   getqy   tos
-
-
-' U// ( dvdn dvsr -- rem quot )
-UDIVMOD                 qdiv    tos1,tos
-                        getqx   tos
-                _ret_   getqy   tos1
-
-
-' U/ ( u1 u2 -- quot )
-UDIVIDE                 qdiv    tos1,tos
-                        getqx   tos1
-                        jmp     #DROP
 
 ' DRAW VIDEO CHARACTER'
 ' WRCH ( font screen pen.paper )'
@@ -1477,8 +1482,7 @@ DAT		org
 vgainit
 		call	#loadpal
 		rdfast	##640*480/64,##bmporg+bmppic 'set rdfast to wrap on bitmap
-		setxfrq ##round(fset)		'set transfer frequency to 25MHz
-
+''		setxfrq ##round(fset)
 		'  cmod   65_4_321_0'		' VGA
 		setcmod	#%01_0_000_0		'enable vga colorspace conversion
 		rdbyte	x,#@_VGACFG		' read hsync
@@ -1526,7 +1530,11 @@ hsync		xcont	m_bs,#0			'horizontal sync
 	_ret_	xcont	m_bv,#0
 
 ' Load palette from hub into lut '
-loadpal		mov	x,#0
+loadpal
+		rdlong	x,#@_vgaset
+		setxfrq x		'set transfer frequency to 25MHz
+
+		mov	x,#0
 		rdfast	#0,##bmporg+bmppal 	'load .bmp palette into lut
 		rep	@.end,#$100		' 256 colors
 		rflong	y
@@ -1597,7 +1605,6 @@ READRX		rdword	r0,#@rxrd
 		wrword	r0,#@rxrd
 rr1		jmp	#PUSHACC
 
-DBIP		jmp	#DBPRINTA
 
 
 DEBUGGER	ret
@@ -1605,6 +1612,19 @@ DEBUGGER	ret
 '''		jmp 	#\_Start_Monitor	' \ forces absolute address '
 
 
+{
+SLOWK		rdlong	fx,##SLOWCALL
+SETSPI		mov	RWAIT,fx
+		mov	WWAIT,fx
+		jmp	#EXIT
+FASTK		mov	fx,#0
+		jmp	#SETSPI
+SLOWCLK		waitx	#511
+		outnot  sck
+		waitx	#511
+		ret
+SLOWCALL	call	#\SLOWCLK
+}
 
 ' Registers can be used just like variables and the interpreted kernel uses some for itself
 ' 128+ bytes are reserved. Since the registers are pointed to by "regptr" they can relocated
@@ -1695,12 +1715,82 @@ _ULT                    cmp     tos1,tos wc
 CFLG                    subx    tos1,tos1
                         jmp     #DROP
 
+'' a=tos,b=tos1,c=tos2,d=tos3
+'' b++
+bINC		_ret_	add	tos1,#1
+
+'''''''''''''' CORDIC '''''''''''''
+'
+' cordic moved to hubexec since there is only a few cycles penalty due to pipeline
+'
+'
+MULTIPLY                qmul    tos,tos1
+                        getqx   tos1
+                        jmp     #DROP
+
+' UM* ( u1 u2 -- ud. )
+' DESC: unsigned 32bit * 32bit multiply -- 64bit result
+UMMUL                   qmul    tos,tos1
+                        getqx   tos1
+                _ret_   getqy   tos
+
+' U// ( dvdn dvsr -- rem quot )
+UDIVMOD                 qdiv    tos1,tos
+                        getqx   tos
+                _ret_   getqy   tos1
+
+
+' U/ ( u1 u2 -- quot )
+UDIVIDE                 qdiv    tos1,tos
+                        getqx   tos1
+                        jmp     #DROP
+
+
+' SQRT ( d. -- sqrt )
+_SQRT                   qsqrt   tos1,tos
+                        getqx   tos1
+                        jmp     #DROP
+
+
+
+{
+' ': DM* ( d. n -- d. )	-ROT SWAP 3RD UM* ROT 4TH * + ROT DROP ;
+DMMUL	word	ROT2,SWAP,THIRD,UMMUL,ROT,FOURTH,MULTIPLY,PLUS,ROT,DROP,EXIT
+FETCH2	word	DUP,FETCH,SWAP,INC4,FETCH,EXIT
+STORE2	word	SWAP,OVER,INC4,STORE,STORE,EXIT
+}
+{
+'' D! ( d. addr -- )
+STORE2 			wrlong	tos2,tos
+			add	tos,#4
+			wrlong	tos1,tos
+			jmp	#DROP3
+'' D@ ( addr -- d. )
+FETCH2			rdlong	r1,tos		' read low 32-bits
+			add	tos,#4
+			rdlong	fx,tos		' read high '
+			mov	tos,r1		' set low'
+			jmp	#PUSHX		' push high
+
+' D+ ( d1. d2. -- d3. )
+DPLUS			add	tos3,tos1 wc
+			addx	tos2,tos
+			jmp	#DROP2
+
+DSUB			sub	tos3,tos1 wc
+			subx	tos2,tos
+			jmp	#DROP2
+
+}
+
+
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
 ' main division sub - called both by U/ and U//
 ' double div, single divisor
 ' By specifing bits and left justifying the routine can be adapted and run faster
 ' CLKHZ 1234 LAP U// LAP .LAP  27.400us ok --> 18.800us
-
+' UM//
 ' UM/MOD64 ( Dbl.dividend divisor -- remainder Dbl.quotient)
 UMDIVMOD64      mov     ACC,#32
 UMDIVMOD32      add     ACC,#32
@@ -1731,7 +1821,7 @@ SPIPINS ' ( long --- ) sets bit numbers for SPI mode from bytes in long as cs.mi
 		getbyte	mosi,tos,#1
 		getbyte	miso,tos,#2
 		getbyte	ss,tos,#3
-		drvh    sck              ' clock high/low ? (testing)
+		drvl    sck              ' clock high/low ? (testing)
 		drvh    ss               ' chip select high
 		drvh    mosi             ' mosi high
 		drvl    ss		 ' pulse cs to clock other device
@@ -1794,7 +1884,7 @@ DELTA                   call    #POPX
 '' WAITCNT ( -- )
 WAITCNTS        _ret_   waitx   deltaR          '' continue from last count (must be called before target is reached)
 
-
+{
 _SETSE1			setse1	tos
 			jmp	#DROP
 _SETSE2			setse2	tos
@@ -1807,6 +1897,9 @@ _WAITSE1	_ret_	waitse1
 _WAITSE2	_ret_	waitse2
 _WAITSE3	_ret_	waitse3
 _WAITSE4	_ret_	waitse4
+
+}
+
 
 {
 
@@ -1943,12 +2036,6 @@ QJMP                    rdword  fx,tos wz       ' read contents of vector
 
 
 
-' SQRT ( d. -- sqrt )
-_SQRT                   qsqrt   tos+1,tos
-                        getqx   tos+1
-                        jmp     #DROP
-
-
 {
 _INCMOD '( mod dst -- )
                 incmod  tos,tos+1
@@ -1967,7 +2054,7 @@ _HUBSET
                 jmp     #DROP
 
 
-
+{
 
 ' WS2812 ( array ledcnt -- ) pin is in cog "pinreg" - line RET is done at HL, not here
 ' Will transmit a whole array of 24-bit words each back to back in WS2812 timing format
@@ -1994,7 +2081,7 @@ WSLED	      rdbyte 	r2,##wsdly
               djnz      tos,#.l2        ' read the next long as long as we can (tos = count)
               jmp       #DROP2          ' tx line left low to synch - discard stack parameters, all done.
 
-
+}
 
 
 {
@@ -2167,8 +2254,10 @@ taqoz_rxisr	shl 	rxlong,#8
                 rdpin   rxz,#rx_pin       		' recv byte (bits31:24) from rx pin
 		shr	rxz,#24				' right justify'
 		or	rxlong,rxz wz			' update history word'
-		cmp	rxlong,##$1B1B1B1B wz		' check for sequence esc esc esc esc '
-''	if_z	coginit #0,#0	''@_RESET		' force reset '
+		cmp	rxlong,##$1B1B1B1B wz		' check for sequence'
+	if_z	coginit #0,#0	''@_RESET		' force reset '
+
+		cmp	rxlong,##$1A1A1A1A wz		' check for sequence '
 	if_z	decod	rxz,#28				' reboot via hub'
 	if_z	hubset	rxz
 		mov	rxwrP,rxwrC			' update write pointer'
@@ -2277,108 +2366,11 @@ LDEC    word    MINUS1,LINC+2+ex
 LINC    word    _1,SWAP,PLUSST,EXIT
 
 
-'BOOTQ  word    rg+bootsig
 FETCHX  word    FETCH,EXIT
 
 
 
 
-''''''''''''''''''' SMARTPIN MODES '''''''''''''''''
-
-{
-%AAAA_BBBB_FFF_PPPPPPPPPPPPP_TT_MMMMM_0
- %AAAA:    �� �A�� "! input selector
- %BBBB:    �� �B�� "! input selector
- %FFF:    �� �A�� "! and �� �B�� "! input logic/filtering (after �� �A�� "! and �� �B�� "! input selectors)
- %P..P:    low-level pin control (needs final silicon to fully operate)
- %TT:    pin DIR/OUT control (default = %00)
- %MMMMM:    00000   = smart pin off (default)
-( * OUT signal overridden )
-
-00 100*  = pulse/cycle output
-00 101*  = transition output
-00 110*  = NCO frequency
-00 111*  = NCO duty
-01 000*  = PWM triangle
-01 001*  = PWM sawtooth
-}
-
-MUTE    word    _ATPIN,_FLOAT,_0,_WRPIN,EXIT
-
-MHZ     word    W1000,MUL16
-KHZ     word    W1000,MUL16
-HZ      word    NCOCNT
-NCO     word    w+%01_00110
-' ( Y X mode -- )       mode    prescaler  value
-' SMART ( n mode -- )
-SETNCO  word    _SHL1,_ATPIN,LOW,_WRPIN,_1,_WXPIN,_WYPIN,EXIT
-
-' DUTY ( val -- ) $4E 100.1110
-DUTY    word    w+%01_00111,SETNCO+ex
-
-' -1/2 /CLKHZ/20000     == HZCON
-' NCOCNT ( freq -- ncocnt )     HZCON #10000 */ ;
-HZCON   word    CONL
-        long    536870
-NCOCNT  word    HZCON,_WORD,10000,MULDIV,EXIT
-
-' BLINK ( pin -- )
-BLINK   word    _PIN,_2,HZ+ex
-
-'--- TRIANGLE PWM MODE
-' PWM ( duty frame div -- )     @PIN LOW $50 WRPIN SWAP 16 << + WXPIN WYPIN ;
-PWM     word    w+$50
-PWM1    word    L,_WRPIN,SWAP,_SHL16,PLUS,_WXPIN,_WYPIN,EXIT
-SAW     word    w+$52,PWM1+ex
-' SAW ( duty frame div -- )     @PIN LOW $50 WRPIN SWAP 16 << + WXPIN WYPIN ;
-
-
-ns      word    _WORD,nscnt,UDIVIDE,EXIT
-' transistion mode
-' PW ( width -- )
-PW      word    L,w+%01_00101_0,_WRPIN,_WXPIN,EXIT
-PULSE   word    _1
-PULSES  word    _WYPIN,EXIT
-' HILO ( high low -- )
-HILO    word    L,w+%01_00100_0,_WRPIN,SWAP,OVERPLUS,SWAP,_SHL16,_OR,_WXPIN,EXIT
-
-
-
-
-
-
-
-
-''''''''''''''' SERIAL MODES ''''''''''''''''''
-
-DL      word    w+tepin,COGFETCH,EXIT
-' BIT ( n -- ) Set bit length of serial smartpin interface
-BIT     word    DEC,w+tepin,COGSTORE,EXIT
-
-TXD     word    H,w+$7C
-' BAUD ( baud mode -- )
-BAUDST  word    _WRPIN,CLKHZ,SWAP,UDIVIDE,_SHL16,DL,_ZEQ,_IF+02,_8,BIT,DL,PLUS,_WXPIN,_ATPIN,HIGH,EXIT
-RXD     word    w+$3E,BAUDST+ex
-
-{ TRANSMITTING ASYNCH
-TAQOZ# 34 PIN 8 BIT 115200 TXD  ok
-TAQOZ# $55 WYPIN  ok
-TAQOZ# $41 WYPIN  ok
-TAQOZ# @NAMES 4 TXDAT  ok
-}
-'        1098 7654 321 0987654321098 76 54321 0
-'           0 0001 000 0000000000000 01 11100 0
-' D/# = %AAAA_BBBB_FFF_PPPPPPPPPPPPP_TT_MMMMM_0
-' 11100*  = sync serial transmit         (A-data, B-clock)
-' SYNTX ( bits -- )             L $100.0078 WRPIN 1- $20 OR WXPIN ;
-SYNTX   word    w+$78
-
-
-{
-pub TX		WYPIN ;
-pub SERIAL ( pin -- )           PIN ' TX uemit W! ;
-
-}
 
 ''''''''''''''''''' CONSTANTS '''''''''''''''''''''
 
@@ -2388,12 +2380,10 @@ W1000000
 W1000   word    CONL
         long    1000
 
-CLKHZ   word    CONL
-        long    sys_clk
-CLKKHZ  word    CONL
-        long    sys_clk/1000
-CLKMHZ  word    CONL
-        long    sys_clk/1000000
+CLKHZ   word	w+$14,FETCH,EXIT
+CLKMHZ  word    CLKHZ,_LONG
+	long	1000000
+	word	UDIVIDE,EXIT
 
 
 
@@ -2432,179 +2422,6 @@ pub 62.5MHZ     $C7 HUBSET ;
 
 
 
-
-{ *** NUMBER BASE *** }
-
-
-' change the default number bases
-
-BIN     word    w+2
-SETBASE word    rg+base
-CSTOREX word    CSTORE,EXIT
-DECIMAL word    w+10,SETBASE+ex
-HEX     word    w+16,SETBASE+ex
-GETBASE word    rg+BASE,CFETCH,EXIT
-
-
-' >UPPER  ( str1 --  ) Convert lower-case letters to upper-case
-TULP    word    INC
-TOUPPER word    DUPCFT,QDUP,_IF+08                      ' end of string?
-        word    w+"a",w+"z",WITHIN
-        word    _UNTIL+08
-        word    w+$E0,OVER,CPLUSST,TULP+ex              ' convert case (subtract $20)
-        word    DROPEX+ex
-
-{ *** STRING TO NUMBER CONVERSION *** }
-
-DECQ    word    w+"0",w+"9",WITHIN+ex
-HEXQ    word    w+"A",w+"F",WITHIN+ex
-
-' functional test for now - optimize later
-' Convert ASCII value as a digit to a numeric value - only interested in bases up to 16 at present
-'
-TODIGIT ' ( char -- val true | false )
-        word    DUP,DECQ,_IF+04 ',td8           ' only work with 0..9,A..F
-        word    w+"0",MINUS
-TRUEX   word    _TRUE,EXIT                      ' pass decimal digits
-td8     word    DUP,HEXQ,_IF+03 ',td2
-        word    w+$37,MINUS,TRUEX+ex            ' pass hex digits
-td2     word    DROP
-FALX    word    _FALSE,EXIT
-
-{  Try to convert a string to a number
-Allow all kinds of symbols but these are the rules for it to be treated as a number.
-1. Leading character must be either a recognized prefix or a decimal digit
-2. If trailing character is a recognized suffix then the first character must be a decimal digit
-Acceptable forms are:
-$1000   hex number
-1000h
-#1000   decimal number
-1000d
-%1000   binary number
-1000b
-
-Also as long as the first character and last character are valid (0..9,prefix,suffix) then any symbols me be mixed in the number i.e.
-11:59  11.59  #5_000_000
-}
-
-OVEQ	word	THIRD,_EQ,EXIT
-
-_NUMBER ' ( str -- value digits | false )
-        word    rg+4,CLRL                                               ' REG0L = 0
-        word    w+sign,CLRflg                                           ' clear sign
-snlp
-        word    DUP,STRLEN,OVERPLUS,DEC,CFETCH,rg+suffix,CSTORE                        ' save suffix (assume string has count byte)
-        word    DUPCFT,w+"-",_EQ,_IF+03                                 ' save SIGN
-        word    w+sign,SETFLG,INC                               ' and use string without sign
-                                                                        ' prefix may come after the sign
-        word    DUPCFT,DUP,rg+prefix,CSTORE                             ' save prefix (it may or may not be)
-
-        ' PREFIX HANDLER
-        '       ( str ch )
-        word    _FALSE                                                  ' preset prefix flag = false
-'               $nnnn - set hex base - flag true
-        word    w+"$",OVEQ,_IF+02,HEX,INC
-        'word    w+"#",OVEQ,_IF+02,DECIMAL,INC                       ' as does # - also set decimal base
-        word    w+"%",OVEQ,_IF+02,BIN,INC                           ' as does % - also set binary base
-        word    w+"&",OVEQ,_IF+05,DECIMAL,INC                       ' as does & - also set decimal base and IP notation
-        word    w+$80,rg+bnumber+3,CSTORE                               ' this forces "." symbols to work the same as ":"
-        '       ( str ch flg )
-        word    DUP,_IF+03,ROT,INC,ROT2                                 ' adjust string pointer to skip prefix
-        '       ( str ch flg )
-        word    SWAP,DECQ,_OR                                           ' 0..9 forces processing as a number
-        ''      ( str flg ) flg is true if a prefix is found OR the first character is 0..9
-        word    SKIPNZ,DROPFEX+ex ' ( -- false )                                ' Give up now, it isn't a candiate
-        ''      ( str )                                                 ' so far, so good, now check suffix
-        ' SUFFIX HANDLER  - must end in 0..9 or A..F or valid suffix
-        word    rg+suffix,CFETCH
-        word    DUP,DECQ                                                ' 0..9
-        word    OVER,HEXQ,_OR                                           ' A..F ( str sfx flg ) true if still a digit
-        word    w+"h",OVEQ,_IF+02,HEX,INC                           ' h = HEX
-        word    w+"b",OVEQ,_IF+02,BIN,INC                           ' b = BINARY
-        word    SWAP,w+"d",_EQ,_IF+02,DECIMAL,INC                       ' d = DECIMAL
-        word    SKIPNZ,DROPFEX+ex                                               ' bad suffix, no good
-        ' so far the prefix and suffx have been checked prior to attempt a number conversion
-        ' From here on there must be at least one valid digit for a number to be accepted
-        ' DIGIT EXTRACTION & ACCUMULATION
-nmlp
-        word    DUPCFT,DUP,_IF+(nmend-nm1)/2                    ' while there is another character
-nm1     word    TODIGIT,_IF+(nmsym-nm2)/2                               ' convert to a digit? or else check symbol
-        ' a digit has been found but is it valid for this base? ' ( str val )
-nm2     word    DUP,GETBASE,DEC,GT,_IF+02
-FALX2   word    DROP2,FALX+ex                                           ' a digit but exceeded base
-nmok    word    rg+anumber,FETCH,GETBASE,MULTIPLY                       ' shift anumber left one digit (base)
-        word    PLUS,rg+anumber,STORE                                   ' and merge in new digit
-        word    rg+digits,CINC                                          ' update number of digits
-nmnxt   word    INC,nmlp+ex                                             ' update str and loop
-
-        ' character was not a digit - check for valid symbols (keep it simple for now)
-        ' SYMBOLS
-nmsym   word    DUPCFT,w+":",_EQ                                        ' : ENTER
-        word    OVER,CFETCH,w+".",_EQ                                   '  . dot
-        word    DUP,_IF+04,rg+digits,CFETCH,rg+dpl,CSTORE               ' remember last decimal place
-ns01    word    rg+bnumber,FETCH,_ZNE,_AND,_OR
-        word    _IF+10                                                  ' Use : as special byte shift for IP notation etc
-nmsym1  word    rg+bnumber,FETCH
-        word    rg+anumber,FETCH,PLUS,_SHL8
-        word    rg+bnumber,STORE,rg+anumber,CLRL                        ' accumulate & number in bnumber
-nmsym2  word    nmnxt+ex                                                ' just ignore other symbols for now
-        '
-nmend   ' end of string - check
-        word    DROP2,rg+digits,CFETCH,DUP,ZEXIT                        ' return with false if there are no digits
-        word    rg+anumber,FETCH,rg+bnumber,FETCH,PLUS
-        word    w+sign,CHKFLG,QNEGATE
-        word    SWAP,EXIT                                               ' all good, return with number and true
-
-' NUMBER processing -try to convert a string to a number
-NUMBER  ' ( str -- value digits | false )
-        ' process control prefix i.e. ^A
-        word    DUP,STRLEN,_2,_EQ
-        word    OVER,CFETCH,w+"^",_EQ,_AND,_IF+06                       ' ^ch  Accept caret char as <control> char
-        word    INC,CFETCH,w+$1F,_AND,_1,EXIT                           ' control character processed - single digit
-        ' process character literal i.e. "A"
-ch01    word    DUP,STRLEN,_3,_EQ
-        word    OVER,CFETCH,DUP,w+$22,_EQ,SWAP,w+$27,_EQ
-        word    _OR,_AND,_IF+04                                 ' "ch" or 'ch' Accept as an ASCII literal
-ascch   word    INC,CFETCH,_1,EXIT
-
-                                                                        ' It wasn't an ASCII literal, process as a number
-ch02    word    rg+anumber,w+10,ERASE                                   ' zero out assembled number (double), digits, dpl
-        word    GETBASE,rg+base+1,CSTORE                                ' backup current base as it may be overridden
-        word    _NUMBER '( str -- digits num | false )
-nmb1    word    rg+base+1,CFETCH,SETBASE+ex                             ' restore default base before returning
-
-
-
-' QFNUM ( -- flg ) Test if word is a fast prefixed number
-QFNUM   'word   _TRUE,rg+wordbuf,DUP,STRLEN,ADO,IX,CFETCH,DECQ,_AND,LOOP,QDUP,IFEXIT
-        word    rg+wordbuf,CFETCH,w+"#",w+"%",WITHIN                    ' Numeric prefixes?
-        word    rg+wordbuf-1,CFETCH,_2,GT,_AND                          ' and more than 2 characters? (inc term)
-        word    rg+wordbuf-1,DUPCFT,PLUS,CFETCH                 ' and last char is a digit or hex digit?
-        word    DUP,DECQ                                                ' decimal digit?
-        word    SWAP,HEXQ,_OR,_AND                                      ' hex digit?
-        word    EXIT
-
-
-
-{ *** COMPILER EXTENSIONS *** }
-
-
-
-' Most of these words are acted upon immediately rather than compiled as they are
-' part of the "compiler" in that they create the necessary structures
-'
-
-''' dumb compiler for literals - improve later - just needs to optimize the number of bytes needed
-LITCOMP ' ( n -- ) compile the literal according to size
-        word    DUP,_SHR16,_IF+07
-        	' Compile long
-        word    w+_LONG,COMPW                               ' compile the _LONG instruction
-        word    DUP,_SHR16,SWAP,COMPW,COMPW+ex                                  ' compile the long itself
-        	' Compile 2 bytes - 16bits
-.L1     word    DUP,W+10,_SHR,_IF+03			' 10 BIT LITERAL?'
-        word	w+_WORD,COMPW,COMPW+ex
-.L2     	' Compile short literal directly
-        word    _WORD,w,PLUS,COMPW+ex
 
 
 ''''    BEGIN as in BEGIN...AGAIN or BEGIN...UNTIL  generate branch for BEGIN
@@ -2659,7 +2476,8 @@ _ELSE_
 ''              get the IF addr and proceed as if it were a THEN
         word    SWAP,w+$1F,MARK
 ' THEN
-_THEN_  word    UNMARK '( addr tag )
+_THEN_	word	ATCODES,w+athen,WSTORE
+  	word    UNMARK '( addr tag )
         '
         ' ( addr tag ) resolve structure branch
         ''      ELSE THEN ?
@@ -2673,7 +2491,6 @@ _THEN_  word    UNMARK '( addr tag )
 badthen word    PRTSTR
         byte    " Structure mismatch! ",0
         word    ERROR,DROPEX+ex
-
 
 
 
@@ -2776,7 +2593,8 @@ NFACPA	word    CFETCHINC,w+cntm,_AND,PLUS,EXIT
 ' ' <name>  ( -- pfa ) Find the address of the following word - zero if not found or its CFA/PFA
 TICK    word    NFATICK
 ' CFA ( nfa -- cfa )'
-NFACFA  word    DUP,ZEXIT,NFACPA,WFETCH,EXIT
+NFACFA  word    DUP,ZEXIT,NFACPA
+WFETCHX	word	WFETCH,EXIT
 
 ATICK   word    TICK,LITCOMP+ex
 
@@ -2791,14 +2609,14 @@ _ALIGN  word    DEC,SWAP,OVERPLUS,SWAP,_ANDN,EXIT
 
 
 {HELP _HERE ( -- addr ) Address of next compilation location }
-ATHERE  word    rg+here,WFETCH,EXIT
+ATHERE  word    rg+here,WFETCHX+ex
 ' ( -- atradr ) --- point to the attribute byte in the header of the latest name
 ATATR
 ATNAMES word    rg+names,FETCHX+ex
-ATCODES word    rg+codes,WFETCH,EXIT
+ATCODES word    rg+codes,WFETCHX+ex
 
 
-'  CREATEWORD - create a name in the dictionary using the next word encountered
+'  CREATEWORD - create a name in the dictionary using the next word encountered in the stream
 ''               cnt,name,atr,cpa
 CREATEWORD
         word    _GETWORD                                ' ( str ) read the next word
@@ -2817,32 +2635,37 @@ CREATESTR
         word    DUP,INC2,NEGATE,rg+names,PLUSST
         ''      copy it across
         word    ATNAMES,SWAP,CMOVE
+
         ''      check for dictionary full ( less than 64 bytes )
         word    ATNAMES,ATHERE
         word    w+64,PLUS,LT,ZEXIT,PRTSTR
         byte    "  Dictionary full! ",0
         word    ERROR+ex
 
-' CREATE <name> - Create a name in the dictionary and also a VARIABLE code entry - or revectored through NOP
+' CREATE: <name> - Create a name in the dictionary and compile a VARIABLE code entry - or revectored through NOP
 CREATE  word    _NOP,CREATEWORD,w+VARB,COMPW,_0,ALLOT+ex
+
 
 ' Change the value of a constant
 ' pub :=! ( val 'con -- )               2+ ! ;
 CONST   word    INC2,STOREX+ex
 
-_VAR    word    CREATE,_0,COMPL+ex
+_VAR    word    CREATE,SETHDR,_0,COMPL+ex
+
+' #=
+'_CON9   word    GRAB,CREATEWORD,SETHDR,BITS9,_WORD,w,PLUS,ATNAMES,NFACPA,WSTOREX+ex
 
 ' :=
-_CON9   word    GRAB,CREATEWORD,BITS9,_WORD,w,PLUS,ATNAMES,NFACPA,WSTOREX+ex
-
-' ==
-_CONST  word    GRAB,CREATEWORD,w+CONL
+_CONST  word    GRAB,CREATEWORD,SETHDR,w+CONL
 DCOMP   word    COMPW,COMPL,_0,ALLOT+ex
 
 ' Identical to a constant except the call address is slightly different so a FORGET can release the data area
-_DATCON word    GRAB,CREATEWORD
+_DATCON word    GRAB,CREATEWORD,SETHDR
         word    w+DATCON,DCOMP+ex
 
+PRIVATE	word	w+priatr
+DEFATR	word	rg+atrs,CSTORE,EXIT
+PUBLIC	word	_0,DEFATR+ex
 
 
 ' GETATR ( -- code )
@@ -2851,16 +2674,20 @@ GETATR  word  ATNAMES,_6,_SHR,EXIT
 ' Create a new entry in the dictionary but also prevent any execution of code
 ' : <name>
 
-PUBDEF
 NEWDEF  word    CREATEWORD
 REDEF   word    w+defining,SETFLG+ex                  ' flag that we have entered a definition
 
+
+PUBDEF	word	_0,SDEF+ex
 'MODDEF  word    w+modatr,SDEF+ex
 PREDEF  word    w+preatr,SDEF+ex
 PRIDEF  word    w+priatr
 SDEF    word    NEWDEF
 ' SETATR ( code -- )
 SETATR  word  	_6,_SHL,ATNAMES,CFETCH,w+cntm,_AND,_OR,ATNAMES,CSTORE,EXIT
+
+''	merge in extra attributes
+SETHDR	word	rg+atrs,CFETCH,SETATR+ex
 
 ' Update "here" pointer to point to current free position which "codes" pointer is now at
 '
@@ -2870,10 +2697,12 @@ ENDDEF
 	word	EXITS
 UNDEF   word    w+defining,CLRFLG,ALLOCATED+ex              ' end definition and lock allocated bytes
 
-EXITS	word	ATCODES,DEC2,WFETCH,_WORD,$800,_WORD,INITSP,WITHIN
+'' The ; and EXIT optimizer will only compile an EXIT if it cannot modify the last call to a jump'
+EXITS	word	ATCODES,DEC2,WFETCH 			' read last word compiled (could be end of a string too)'
+	word	_WORD,SPACE,_WORD,$F800-1,WITHIN
+	word	ATCODES,w+athen,WFETCH,_NEQ,_AND
 	word	_IF+09,ATCODES,DEC2,DUP,WFETCH,_1,_OR,SWAP,WSTORE,EXIT
 	word	w+EXIT,COMPW,EXIT
-
 
 {
 
@@ -2908,6 +2737,8 @@ _CASE   word    _WORD,ISEQ,COMPW,_IF_+ex
 ' BREAK
 ISEND   word    w+EXIT,COMPW,_THEN_,ALLOCATED+ex
 
+' <CASE> '
+INCASE	word	_WORD,ISWITHIN,COMPW,_IF_+ex
 
 ' SWITCH>< ( from to -- flg )..
 ISWITHIN
@@ -2954,8 +2785,8 @@ RCMOVE  word    ROT,OVERPLUS,DEC,ROT,THIRD,PLUS,DEC,ROT,pRCMOVE,EXIT
 
 secs    word    W1000,MUL16
 ' ms ( n -- ) Wait for n milliseconds
-ms      word    QDUP,ZEXIT,_LONG
-        long    sys_clk/1000
+ms      word    QDUP,ZEXIT
+	word	CLKHZ,w+1000,UDIVIDE
         word    MULTIPLY,WAIT,EXIT
 
 us      word    CLKMHZ,MUL16,w+485,MINUS,WAIT,EXIT
@@ -2995,7 +2826,18 @@ PRTL    word    HEXSYM
 {HELP .LONG ( n -- ) print n as 8 hex characters }
 PRTLONG word  DUP,_SHR16,PRTWORD
         word  SCORE,PRTWORD+ex
+{
+daoff	long	0
+'' DUMP# ( virtual -- ) Use virtual address in dump listing rather than real address
+DUMPO	word	_WORD,daoff,STORE,EXIT
+}
+PRTADR  word    CRLF,DUP,_SHR16,DUP
+	word	_IF+03,DROP,PRTLONG,PRTCOL+ex '' xxxx_xxxx: long format
+	word	PRTHEX,PRTWORD '' xxxxx: short format
+PRTCOL	word	w+":",EMIT,SPACE+ex
 
+
+''  *** MEMORY READ FUNCTIONS ***
 
 DCFETCH word    rg+dmm,WFETCH,QDUP,_IF+02,ACALL,EXIT
 .L0     word    CFETCH,EXIT
@@ -3004,19 +2846,20 @@ DWFETCH word    rg+dmm+2,WFETCH,QDUP,_IF+02,ACALL,EXIT
 DFETCH  word    rg+dmm+4,WFETCH,QDUP,_IF+02,ACALL,EXIT
 .L0     word    FETCHX+ex
 
+'' DMP: reads in memory functions to use (defaults to hubram)
 SETDMP  word  RPOP,rg+dmm,_6,CMOVE,EXIT
 
 
 DUMP    word    rg+dmp,WFETCH,rg+dmp,CLRW,QDUP,SKIPZ,AJMP,DUMPB+ex
 
-DMPA	word	PRTADR,IX,_16,rg+dcnt,CLRC,EXIT
+DMPA	word	IX,PRTADR,IX,_16,rg+dcnt,CLRC,EXIT
 DSPACE	word	SPACE,rg+dcnt,CINC,rg+dcnt,CFETCH,_3,_AND,IFEXIT,SPACE+ex
 { QUICK DUMP }
 QD      word    w+$20
 '' DUMP ( addr cnt -- ) Hex dump of hub RAM - }
 DUMPB   word    ADO
         word      DMPA,ADO,IX,DCFETCH,PRTBYTE,DSPACE,LOOP
-DMPLP   word      DUMPASC
+DMPASC  word      DUMPASC
         word    _16,PLOOP
 RAM     word    rg+dmm,_8,ERASE,EXIT
 
@@ -3025,12 +2868,12 @@ QW	word	w+$20
 { DUMP as WORDs }
 DUMPW   word    ADO
         word      DMPA,ADO,IX,DWFETCH,PRTWORD,DSPACE,_2,PLOOP
-	word 	  DMPLP+ex
+	word 	  DMPASC+ex
 
 { DUMP as LONGs }
 DUMPL   word    ADO
         word      DMPA,ADO,IX,DFETCH,PRTLONG,DSPACE,_4,PLOOP
-	word 	  DMPLP+ex
+	word 	  DMPASC+ex
 
 { DUMP as ASCII WIDE }
 DUMPAW  word    w+128,DUMPS+ex
@@ -3038,14 +2881,12 @@ DUMPAW  word    w+128,DUMPS+ex
 DUMPA   word    w+64
 DUMPS   word    ROT2
         word    ADO
-        word      PRTADR
+        word      IX,PRTADR
         word      IX,OVER,ATYPE
         word    DUP,PLOOP,DROP
         word    RAM+ex
 ATYPE	word	ADO,IX,DCFETCH,AEMIT,LOOP,EXIT
 
-PRTADR  word    CRLF,IX,DUP,_SHR16,DUP,_IF+03,DROP,PRTLONG,PRTCOL+ex,PRTHEX,PRTWORD
-PRTCOL	word	w+":",EMIT,SPACE+ex
 
 DUMPASC word      SPACES3,PRTTICK,IX,_16,ADO,IX,DCFETCH,AEMIT,LOOP,PRTTICK+ex
 
@@ -3065,6 +2906,9 @@ COGLUT  word    COGFETCH,PRTLONG,DSPACE,LOOP,EXIT
 ' Print the stack(s) and dump the registers - also called by hitting <ctrl>D during text input
 DEBUG	word	rg+linenum,CLRW
    	word    PRTSTKS
+        word    PRTSTR
+        byte    $0D,$0A,"COG  ",0
+        word    _0,w+$28,COGDUMP
         word    PRTSTR
         byte    $0D,$0A,"REGS ",0
         word    rg+temp,w+$100,DUMPW
@@ -3167,6 +3011,25 @@ REPLAP  word    DUP,CLKHZ,LT,_IF+17,w+100,MULTIPLY,_3,_SHR,.L0+ex
 PRTMS   word    LAPCAL,REPLAP+ex
 }
 
+QSTACKS
+	word	_DEPTH,w+32,GT,ZEXIT,INITSP,EXIT
+
+PRTSTK  word    PRTSTRN
+        byte    " DATA STACK (",0
+        word    _DEPTH,DUP,PRINT1
+        word    ZEXIT
+        word    _DEPTH,w+32,_MIN,DUP,_0
+        word    DO,CRLF,IX,INC,PRINT,SPACES3,DEC,DUP,INC4,LUTFETCH,DUP,PRTL,SPACES3,PRINT,LOOP
+        word    DROPEX+ex
+PRINT1  word    PRINT,w+")",EMIT+ex
+
+PRTSTKS word    PRTSTK
+PRTRET  word    PRTSTRN
+        byte    " RETURN (",0
+        word    w+retstk,w+retptr
+PRTSTKX word    COGFETCH,DUP2,SWAP,MINUS,PRINT1
+DMPSTK  word    SPACES3,SWAP
+.L0     word    DUP2,_NEQ,_IF+06,DUP,LUTFETCH,SPACE,PRTL,INC,.L0+ex,DROP2,EXIT
 
 
 QCHAR   word    DUP,_BL,w+$7E,WITHIN+ex
@@ -3325,6 +3188,203 @@ PRTDEC  word    PRTAST
         word    EXIT
 
 
+{ *** NUMBER BASE *** }
+
+
+' change the default number bases
+
+BIN     word    w+2
+SETBASE word    rg+base
+CSTOREX word    CSTORE,EXIT
+DECIMAL word    w+10,SETBASE+ex
+HEX     word    w+16,SETBASE+ex
+GETBASE word    rg+BASE,CFETCH,EXIT
+
+
+' >UPPER  ( str1 --  ) Convert lower-case letters to upper-case
+TULP    word    INC
+TOUPPER word    DUPCFT,QDUP,_IF+08                      ' end of string?
+        word    w+"a",w+"z",WITHIN
+        word    _UNTIL+08
+        word    w+$E0,OVER,CPLUSST,TULP+ex              ' convert case (subtract $20)
+        word    DROPEX+ex
+
+{ *** STRING TO NUMBER CONVERSION *** }
+
+' DECIMAL? '
+DECQ    word    w+"0",w+"9",WITHIN+ex
+' HEX? '
+HEXQ    word    w+"A",w+"F",WITHIN+ex
+
+' functional test for now - optimize later
+' Convert ASCII value as a digit to a numeric value - only interested in bases up to 16 at present
+'
+TODIGIT ' ( char -- val true | false )
+        word    DUP,DECQ,_IF+04 ',td8           ' only work with 0..9,A..F
+        word    w+"0",MINUS
+TRUEX   word    _TRUE,EXIT                      ' pass decimal digits
+td8     word    DUP,HEXQ,_IF+03 ',td2
+        word    w+$37,MINUS,TRUEX+ex            ' pass hex digits
+td2     word    DROP
+FALX    word    _FALSE,EXIT
+
+{  Try to convert a string to a number
+Allow all kinds of symbols but these are the rules for it to be treated as a number.
+1. Leading character must be either a recognized prefix or a decimal digit
+2. If trailing character is a recognized suffix then the first character must be a decimal digit
+Acceptable forms are:
+$1000   hex number
+1000h
+#1000   decimal number
+1000d
+%1000   binary number
+1000b
+
+Also as long as the first character and last character are valid (0..9,prefix,suffix) then any symbols me be mixed in the number i.e.
+11:59  11.59  #5_000_000
+
+$FFFFFFFF
+4294967295
+
+DOUBLE NUMBERS - use a dot at end of number to signify double-precision (or >32bits)
+$DEADBEEFBABECAFE.
+18446744073709551615d.
+}
+
+OVEQ	word	THIRD,_EQ,EXIT
+
+' ': DM* ( d. n -- d. )	-ROT SWAP 3RD UM* ROT 4TH * + ROT DROP ;
+DMMUL	word	ROT2,SWAP,THIRD,UMMUL,ROT,FOURTH,MULTIPLY,PLUS,ROT,DROP,EXIT
+FETCH2	word	DUP,FETCH,SWAP,INC4,FETCH,EXIT
+STORE2	word	SWAP,OVER,INC4,STORE,STORE,EXIT
+
+DNUMQ	word	rg+suffix,CFETCH,w+".",_EQ,EXIT
+
+_NUMBER ' ( str -- value digits | false )
+        word    rg+4,CLRL                                               ' REG0L = 0
+        word    w+sign,CLRflg						' clear sign
+snlp
+        word    DUP,STRLEN,OVERPLUS,DEC,CFETCH,rg+suffix,CSTORE		' save suffix (assume string has count byte)
+        word    DUPCFT,w+"-",_EQ,_IF+03                                 ' save SIGN
+        word    w+sign,SETFLG,INC					' and use string without sign
+                                                                        ' prefix may come after the sign
+        word    DUPCFT,DUP,rg+prefix,CSTORE                             ' save prefix (it may or may not be)
+
+        ' PREFIX HANDLER
+        '       ( str ch )
+        word    _FALSE                                                  ' preset prefix flag = false
+        word    w+"$",OVEQ,_IF+02,HEX,INC				' $nnnn - set hex base - flag true
+        word    w+"#",OVEQ,_IF+02,DECIMAL,INC				' as does # - also set decimal base
+        word    w+"%",OVEQ,_IF+02,BIN,INC 				' as does % - also set binary base
+        word    w+"&",OVEQ,_IF+05,DECIMAL,INC				' as does & - also set decimal base and IP notation
+        word    w+$80,rg+bnumber+3,CSTORE                               ' this forces "." symbols to work the same as ":"
+        '       ( str ch flg )
+        word    DUP,_IF+03,ROT,INC,ROT2                                 ' adjust string pointer to skip prefix
+        '       ( str ch flg )
+        word    SWAP,DECQ,_OR                                           ' 0..9 forces processing as a number
+        ''      ( str flg ) flg is true if a prefix is found OR the first character is 0..9
+        word    SKIPNZ,DROPFEX+ex ' ( -- false )   			' Give up now, it isn't a candiate
+        ''      ( str )                                                 ' so far, so good, now check suffix
+        '' SUFFIX HANDLER  - must end in 0..9 or A..F or valid suffix
+        word    rg+suffix,CFETCH
+        word    DUP,DECQ                                                ' 0..9
+        word    OVER,HEXQ,_OR                                           ' A..F ( str sfx flg ) true if still a digit
+	word	OVER,w+".",_EQ,_OR					' allow decimal point suffix (double) 190124'
+        word    w+"h",OVEQ,_IF+02,HEX,INC                           	' h = HEX
+        word    w+"b",OVEQ,_IF+02,BIN,INC                           	' b = BINARY
+        word    SWAP,w+"d",_EQ,_IF+02,DECIMAL,INC                       ' d = DECIMAL
+        word    SKIPNZ,DROPFEX+ex                                   	' bad suffix, no good
+        '' so far the prefix and suffx have been checked prior to attempt a number conversion
+        '' From here on there must be at least one valid digit for a number to be accepted
+	''
+        '' *** DIGIT EXTRACTION & ACCUMULATION ***
+nmlp
+        word    DUPCFT,DUP,_IF+(nmend-nm1)/2				' while there is another character
+nm1     word    TODIGIT,_IF+(nmsym-nm2)/2                               ' convert to a digit? or else check symbol
+        '' a digit has been found but is it valid for this base? 	' ( str val )
+nm2     word    DUP,GETBASE,DEC,GT,_IF+02
+FALX2   word    DROP2,FALX+ex						' a digit but exceeded base
+
+'nmok    word    rg+anumber,FETCH,GETBASE,MULTIPLY			' shift anumber left one digit (base)
+''        word    PLUS,rg+anumber,STORE					' and merge in new digit
+	''	shift double number up one digit and merge
+nmok    word    rg+anumber,FETCH2,GETBASE,DMMUL				' shift anumber left one digit (base)
+        word    ROT2,PLUS,SWAP,rg+anumber,STORE2			' and merge in new digit
+
+        word    rg+digits,CINC						' update number of digits
+nmnxt   word    INC,nmlp+ex						' update str and loop
+
+        '' character was not a digit - check for valid symbols (keep it simple for now)
+        '' SYMBOLS
+nmsym   word    DUPCFT,w+":",_EQ                                        ' : ENTER
+        word    OVER,CFETCH,w+".",_EQ                                   '  . dot
+        word    DUP,_IF+04,rg+digits,CFETCH,rg+dpl,CSTORE               ' remember last decimal place
+ns01    word    rg+bnumber,FETCH,_ZNE,_AND,_OR
+        word    _IF+10                                                  ' Use : as special byte shift for IP notation etc
+nmsym1  word    rg+bnumber,FETCH
+        word    rg+anumber,FETCH,PLUS,_SHL8
+        word    rg+bnumber,STORE,rg+anumber,CLRL                        ' accumulate & number in bnumber
+nmsym2  word    nmnxt+ex                                                ' just ignore other symbols for now
+        '
+nmend   ' end of string - check and push number onto stack
+        word    DROP2,rg+digits,CFETCH,DUP,ZEXIT                        ' return with false if there are no digits
+        word    rg+anumber,FETCH,rg+bnumber,FETCH,PLUS
+        word    w+sign,CHKFLG,QNEGATE
+'!!!! need to be able to negate double number !!!!'
+	word 	DNUMQ,_IF+04,rg+hnumber,FETCH,ROT,EXIT
+        word    SWAP,EXIT                                               ' all good, return with number and true
+
+' NUMBER processing -try to convert a string to a number
+NUMBER  ' ( str -- value digits | false )
+        ' process control prefix i.e. ^A
+        word    DUP,STRLEN,_2,_EQ
+        word    OVER,CFETCH,w+"^",_EQ,_AND,_IF+06                       ' ^ch  Accept caret char as <control> char
+        word    INC,CFETCH,w+$1F,_AND,_1,EXIT                           ' control character processed - single digit
+        '' process character literal i.e. "A"
+ch01    word    DUP,STRLEN,_3,_EQ
+        word    OVER,CFETCH,DUP,w+$22,_EQ,SWAP,w+$27,_EQ
+        word    _OR,_AND,_IF+04                                 	' "ch" or 'ch' Accept as an ASCII literal
+ascch   word    INC,CFETCH,_1,EXIT
+
+                                                                        ' It wasn't an ASCII literal, process as a number
+ch02    word    rg+anumber,w+(dpl-anumber+1),ERASE                      ' zero out assembled number (double), digits, dpl
+        word    GETBASE,rg+base+1,CSTORE                                ' backup current base as it may be overridden
+        word    _NUMBER '( str -- digits num | false )
+nmb1    word    rg+base+1,CFETCH,SETBASE+ex                             ' restore default base before returning
+
+
+
+' QFNUM ( -- flg ) Test if word is a fast prefixed number
+QFNUM   'word   _TRUE,rg+wordbuf,DUP,STRLEN,ADO,IX,CFETCH,DECQ,_AND,LOOP,QDUP,IFEXIT
+        word    rg+wordbuf,CFETCH,w+"#",w+"%",WITHIN                    ' Numeric prefixes?
+        word    rg+wordbuf-1,CFETCH,_2,GT,_AND                          ' and more than 2 characters? (inc term)
+        word    rg+wordbuf-1,DUPCFT,PLUS,CFETCH                 ' and last char is a digit or hex digit?
+        word    DUP,DECQ                                                ' decimal digit?
+        word    SWAP,HEXQ,_OR,_AND                                      ' hex digit?
+        word    EXIT
+
+
+
+{ *** COMPILER EXTENSIONS *** }
+
+
+
+' Most of these words are acted upon immediately rather than compiled as they are
+' part of the "compiler" in that they create the necessary structures
+'
+
+''' dumb compiler for literals - improve later - just needs to optimize the number of bytes needed
+LITCOMP ' ( n -- ) compile the literal according to size
+        word    DUP,_SHR16,_IF+07
+        	' Compile long
+        word    w+_LONG,COMPW                               ' compile the _LONG instruction
+        word    DUP,_SHR16,SWAP,COMPW,COMPW+ex                                  ' compile the long itself
+        	' Compile 2 bytes - 16bits
+.L1     word    DUP,W+10,_SHR,_IF+03			' 10 BIT LITERAL?'
+        word	w+_WORD,COMPW,COMPW+ex
+.L2     	' Compile short literal directly
+        word    _WORD,w,PLUS,COMPW+ex
+
 '---------------------------------------------------
 
 
@@ -3343,7 +3403,7 @@ SCRUB   word    ATHERE,rg+codes,STORE
 ''      restore end-of-line delimiter to a CR
         word    _13,rg+delim+1,CSTORE
 ''      print long line of dashes
-PRTDASH word    CR,w+"-",w+64,EMITS+ex
+PRTDASH word    CR,w+"-",w+79,EMITS+ex
 
 ' 	PUTCH ( ch -- ) write a character into the next free position in the word buffer
 PUTCHAR word    rg+wordcnt,CFETCHINC,PLUS,CSTOREX+ex
@@ -3381,7 +3441,7 @@ ctrls
 ''              discard LF
         word    w+$0A,OVER,_EQ,SKIPZ,DROPFEX+ex
 ''              ^W WORDS
-        word    w+$17,OVER,_EQ,_IF+04,DROP,WORDS,CRLF,FALX+ex
+        word    w+$17,OVER,_EQ,_IF+04,DROP,QWORDS,CRLF,FALX+ex
 ''              ^R FIXDICT
 ''      word    w+$12,OVER,_EQ,_IF+03,DROP,FIXDICT,FALX+ex
 
@@ -3469,11 +3529,11 @@ TASK    word    _3,_SHL,_WORD,tasks,PLUS,EXIT
 }
 
 IDLE    word    INITSTKS
-        word    ATID,_8,ERASE
+        word    ATID,_8,ERASE					' clear this cog's task registers
 idlp    word    _1,ATID,_3,PLUS,CPLUSST                         ' increment task+3 to indicate Tachyon running
-        word    w+10,ms                                         ' do nothing for a bit - saves power (but not with P2)
+        'word    w+10,ms                                         ' do nothing for a bit - saves power (but not with P2)
         word    ATID,WFETCH                                     ' fetch cog's task variable
-        word    QDUP,_UNTIL+11                                  ' until it is non-zero
+        word    QDUP,_UNTIL+09                                  ' until it is non-zero
         word    ACALL                                           ' Execute
         word    ATID,CLRW                                       ' clear run address only if it has returned back to idle
         word    IDLE+ex
@@ -3512,32 +3572,30 @@ FIXDICT         ' Copy dictionary from ROM to area just before copied ROM in ban
 }
 ''              initialize task registers
 ''              free memory                   backup
-	word	rg+0,w+$100,ERASE
-        word    _WORD,codeorg
+	word	rg+0,w+$100,ERASE			' init task registers'
+        word    _WORD,codeorg				' init code pointers'
         word    DUP,rg+here,STORE,rg+here-4,STORE
-	word	_LONG
-	long	datram
-	word	DATORG
-        word    _LONG
-        long    ramdict
-	word    rg+names,STORE
-''        word    DUP,rg+names,STORE,rg+oldnames,STORE
+	word	datcold,DATORG				' init data pointer'
+        word    wordcold,rg+names,STORE			' init dictionary pointer'
 '               reset cold start
 XCOLD  	word    _CON,PRTSTR
         byte    "x",$0D,$0A,"  Cold start",0
    	word    _WORD,$A55A,rg+cold,WSTOREX+ex
 
+wordcold
+	word	CONL
+	long	ramdict
+datcold	word	CONL
+	long	datram
 
 { *** MAIN TERMINAL CONSOLE ***  }
 TERMINAL
         word    InitRP,INITSP                                           	' Init the internal stack and setup external stack space
         word    WP,w+50,ms                                                      ' a little startup delay (also wait for serial cog)
-''	word	w+$10,w+$160,ERASE
-''	word	w+56,BLINK
 	''      performing a check for a saved session
         word    rg+cold,WFETCH,_WORD,$A55A,_NEQ,SKIPZ,COLDST
         word    _CON
-        word    rg+keypoll,CLRW,rg+accept,CLRW
+        word    rg+keypoll,CLRW,rg+uaccept,CLRW
         word    rg+linenum,CLRW
         word    _1,rg+fflags,WSTORE
         ''      Show VERSION with optional CLS (default CR)
@@ -3553,8 +3611,7 @@ TERMINAL
         word    w+echo,rg+fflags,CSTORE
         ''      default delimiter is a space character
         word    _BL,rg+delim,CSTORE
-''	word	MOUNTQ
-''	word	w+"!",w+rxbuffers,CSTORE
+
         '
 CONSOLE word    InitRP,SCRUB,CRLF
         ''      Stop compilation
@@ -3603,10 +3660,9 @@ compword
 chkeol  word    rg+delim+1,CFETCH,_13,_EQ
         word    DUP,_IF+(eol01-.L0)/2
         ''      Yes, put a space between any user input and response
-.L0    '' word    rg+accept,WFETCH,SKIPNZ,SPACE
-''        word    rg+accept,WFETCH,QDUP,_IF+02,ACALL,eol01+ex
-	word	SPACE
-''      word    PROMPT
+.L0     word    rg+uaccept,WFETCH,QDUP,_IF+02,ACALL,eol01+ex
+	word	PRTSTR
+	byte	" --- ",0
         ''      and are we in a definition or interactive?
 eol01   word    DUP,w+defining,CHKFLG,_AND
         ''      If not interactive then CRLF (no other response)
@@ -3621,14 +3677,19 @@ execs   ''      EXECUTE CODE from user input (append an EXIT first)
         ''      execute wordcodes from beginning
 execinp word    ATHERE,ACALL
         ''      execute accept vector if 0<>
-        word    rg+accept,WFETCH,QDUP,_IF+02,ACALL,LINELP+ex
+''        word    rg+uaccept,WFETCH,QDUP,_IF+02,ACALL,LINELP+ex
         word    rg+linenum,WFETCH,SKIPNZ,OK,LINELP+ex
+
+
 '-------------------------------------------------------------
 
 TRYNUM  ''      Attempt to process this word as a number but check for special literals first (^ ' etc)
-        word    rg+wordbuf,NUMBER,_IF+02
+        word    rg+wordbuf,NUMBER,_IF+06
         ''      is it a number? ( value digits )
-compnum word    LITCOMP,chkeol+ex
+compnum	''	COMPILE THE NUMBER
+	word	DNUMQ,_IF+02,SWAP,LITCOMP
+	word	LITCOMP
+	word	chkeol+ex
 
         ''      Unknown word or number - try converting case first time
 UNKNOWN word    rg+fflags+1,CFETCH,_4,_AND,_ZEQ
@@ -3651,8 +3712,8 @@ nfdef   word    PRTSTR
         word    rg+wordbuf,PRINTSTR,SPACE
         ''      discard but echo remainder of line
 .L0     word    WKEY,DUP,_13,_NEQ,_IF+02,EMIT,.L0+ex,DROP
-	word	DEBUG
-	
+	'word	DEBUG
+
         ''      count errors and force a new line to display error
 ERROR   word    rg+errors,WINC	'',CR,w+$10A,EMIT
 ERRSTR  word    PRTSTR
@@ -3662,9 +3723,9 @@ ERRSTR  word    PRTSTR
 ERROUT	word    w+$10A,EMIT,DISCARD,INITSP,_END,CONSOLE+ex
 
 'pri ?ERROR ( cond n -- )		IF .AS"  ERROR# #~# " R> DROP CONSOLE EXIT THEN DROP ;
-QERROR	word	SWAP,_IF+09,PRTAST
-	byte	"   ERROR# #~#",0
-	word	ERROUT+ex
+QERROR	word	SWAP,_IF+09,PRTSTR
+	byte	"   ERROR - ",0
+	word	PRINTSTR,ERROUT+ex
 	word	DROP,EXIT
 
         ' as-you-go error prompt in interactive mode
@@ -3682,11 +3743,11 @@ PUTKEY
 
 ' KEY ( -- ch ) if ch is zero then no key was read
 KEY     word    rg+keychar,CFETCH,QDUP,_IF+06      		' read a "key" that was forced with KEY!
-        word    rg+keychar,FETCH,_SHR8,rg+keychar,STORE,CHKKEY+ex
+        word    rg+keychar,FETCH,_SHR8,rg+keychar,STORE,CHKKEY+ex ' up to 4 keys may be forced
         word    rg+ukey,WFETCH,_IF+06,rg+ukey,WFETCH,ACALL
 	word 	DUP,IFEXIT,DOPOLL+ex
 CONKEY  word    READRX
-DOKEY   word    DUP,_IF+07
+DOKEY   word    DUP,_IF+07 'DOPOLL
         word    BITS8,DUP,_ZEQ,ZEXIT                    	' return as if non-zero
         word    w+$0100,PLUS,EXIT                            	' otherwise add $100 to a null
        '
@@ -3733,33 +3794,12 @@ _END    word    _TRUE,_ECHO
         word    rg+errors,WFETCH,PRTDEC,PRTSTR
         byte    " errors in ",0
         ''      report compile time
-        word    _GETCNT,rg+spincnt,FETCH,MINUS,CLKKHZ,UDIVIDE,PRTDECL,PRTSTR
+        word    _GETCNT,rg+spincnt,FETCH,MINUS,CLKHZ,w+1000,UDIVIDE,UDIVIDE,PRTDECL,PRTSTR
         byte    "ms ",0
         word    _2,CLRFLG+ex
 
 
 '-------------------------------------------------------------
-
-QSTACKS
-	word	_DEPTH,w+32,GT,ZEXIT,INITSP,EXIT
-
-PRTSTK  word    PRTSTRN
-        byte    " DATA STACK (",0
-        word    _DEPTH,DUP,PRINT1
-        word    ZEXIT
-        word    _DEPTH,w+32,_MIN,DUP,_0
-        word    DO,CRLF,IX,INC,PRINT,SPACES3,DEC,DUP,INC4,LUTFETCH,DUP,PRTL,SPACES3,PRINT,LOOP
-        word    DROPEX+ex
-PRINT1  word    PRINT,w+")",EMIT+ex
-
-PRTSTKS word    PRTSTK
-PRTRET  word    PRTSTRN
-        byte    " RETURN (",0
-        word    w+retstk,w+retptr
-PRTSTKX word    COGFETCH,DUP2,SWAP,MINUS,PRINT1
-DMPSTK  word    SPACES3,SWAP
-.L0     word    DUP2,_NEQ,_IF+06,DUP,LUTFETCH,SPACE,PRTL,INC,.L0+ex,DROP2,EXIT
-
 
 
 
@@ -3814,7 +3854,8 @@ B2W     word    _SHL8,ORX+ex
 
 
 ' CTYPE ( str cnt -- )
-CTYPE   word    ADO,IX,CFETCH,TOCHAR,EMIT,LOOP,EXIT
+CTYPE   word    ADO,IX,CFETCH,AEMIT,LOOP,EXIT
+' CTYPE   word    ADO,IX,CFETCH,TOCHAR,EMIT,LOOP,EXIT
 
 {
 ----------------------------------------------------------------
@@ -3825,12 +3866,14 @@ CTYPE   word    ADO,IX,CFETCH,TOCHAR,EMIT,LOOP,EXIT
 PRTVER
         word    PRTSTR
                 '12345678901234567890123456789012345678901234567890123456789011'
-        byte    "  Parallax P2  .:.:--TAQOZ--:.:.  V",0
+''        byte    "  Parallax P2  .:.:--TAQOZ--:.:.  V",0
+        byte    "  Parallax P2  *TAQOZ* Extensible Firmware  V",0
         word    _WORD,@taqoz_version,FETCH
 	word	PRTAST
         byte    "#~#.# '",0
 	word	_WORD,@taqoz_name,_4,CTYPE,w+"'",EMIT
-        word    w+6,SPACES,_WORD,@taqoz_time,FETCH,PRTAST
+	word	SPACE,PRTCLK,SPACE
+        word	_WORD,@taqoz_time,FETCH,PRTAST
 	byte	"6|-4|",0
 	word	CRLF+ex
 
@@ -3846,7 +3889,8 @@ DICTIONARY
 _WORDS	word	rg+delim+1,CFETCH,w+$0D,_NEQ,_IF+01,dwords+ex
 '		             track maximum line width & clear words & word count
 WORDS   word    rg+spincnt,CLRL
-MWORDS	word	CRLF,ATNAMES
+MWORDS
+	word	ATNAMES,DUP,PRTADR
 ''		new line?
 .l0     word    rg+spincnt+1,CFETCH,w+90,GT,_IF+03,CRLF,rg+spincnt+1,CLRC
 	word	rg+spincnt,CFETCH,_IF+05,rg+spincnt,DUP,CDEC,CFETCH,_IF+19
@@ -3885,7 +3929,7 @@ ATDAT   word    ORGPTR,FETCHX+ex
 ' !org '
 INITORG	word	_WORD,_datsav,FETCH
 ' org '
-DATORG	word	ATORG,FETCH,_WORD,_datsav,STORE		' backup org '
+DATORG	word	ATDAT,_WORD,_datsav,STORE		' backup org '
   	word    DUP,ATORG,STORE,ORGPTR,STOREX+ex
 
 ' pub res ( bytes -- )                  _datptr +! ;
@@ -4033,16 +4077,6 @@ romdict
 	byte 5, 	"OVER+"
         word OVERPLUS
 
-{
-	byte 1, 	"A"
-        word DUP
-        byte 1, 	"B"
-        word OVER
-	byte 1, 	"C"
-        word THIRD
-        byte 1, 	"D"
-        word FOURTH
-}
 '
         byte 4, 	"SWAP"
         word SWAP
@@ -4066,6 +4100,8 @@ romdict
         byte 4, 	"?DUP"
         word QDUP
 
+	byte 3,		"OP2"
+	word OP2
 ' BITWISE LOGIC
         byte 3, 	"AND"
         word _AND
@@ -4105,14 +4141,17 @@ romdict
         word _SHR2
         byte 2, 	"4*"
         word _SHL2
+
+	byte 4, 	"16<<"
+        word _SHL16
         byte 3, 	"8<<"
         word _SHL8
+	byte 3, 	"9<<"
+        word _SHL9
         byte 4, 	"16>>"
         word _SHR16
         byte 3, 	"8>>"
         word _SHR8
-        byte 3, 	"9<<"
-        word _SHL9
         byte 3, 	"9>>"
         word _SHR9
 
@@ -4189,6 +4228,10 @@ romdict
         byte 1, 	"!"
         word STORE
 
+	byte 2,		"D@"
+	word FETCH2
+	byte 2,		"D!"
+	word STORE2
 
         byte 4, 	"BIT!"
         word BITST
@@ -4216,13 +4259,18 @@ romdict
         word PLUS
         byte 1, 	"-"
         word MINUS
-
+	byte 3,		"b++"
+	word bINC
         byte 3, 	"UM*"
         word UMMUL
         byte 1, 	"*"
         word MULTIPLY
         byte 2, 	"W*"
         word MUL16
+
+	byte 3,		"DM*"
+	word DMMUL
+
 
         byte 1, 	"/"
         word DIVIDE
@@ -4350,10 +4398,12 @@ romdict
         word _SWITCH
         byte 5,         "CASE@"
         word SWFETCH
-        byte 5,         "CASE="
-        word ISEQ
-        byte 5,         "CASE>"
-        word ISWITHIN
+
+''	byte 5,         "CASE="
+''        word ISEQ
+''
+        byte 6+im,      "<CASE>"
+        word INCASE
         byte 5+im,      "BREAK"
         word ISEND
         byte 4+im,      "CASE"
@@ -4406,15 +4456,14 @@ romdict
         word LOW
         byte 5, 	"FLOAT"
         word _FLOAT
+	byte 6,		"MSBOUT"
+	word MSBOUT
+	byte 6,		"MSBOUT"
+	word LSBOUT
 
         byte 4, 	"PIN@"
         word PINTEST
 
-
-''      byte 6, 	"SHROUT"
-''      word SHROUT
-''      byte 6, 	"SHRINP"
-''      word SHRINP
 
 ' SMARTPIN INSTRUCTIONS
         byte 5, 	"WRPIN"
@@ -4430,6 +4479,8 @@ romdict
         word _RQPIN
         byte 5, 	"AKPIN"
         word _AKPIN
+	byte 6, 	"RDPINC"
+        word _RDPINC
 
         byte 7, 	"WAITPIN"
         word WAITPIN
@@ -4444,87 +4495,12 @@ romdict
         byte 4, 	"@PIN"
         word _ATPIN
 
-
-        byte 2, 	"ns"
-        word ns
-        byte 2, 	"PW"
-        word PW
-        byte 5, 	"PULSE"
-        word PULSE
-        byte 6, 	"PULSES"
-        word PULSES
-        byte 4, 	"HILO"
-        word HILO
-
-
-
-' SMARTPIN NCO/PWM
-        byte 4, 	"DUTY"
-        word DUTY
-        byte 3, 	"NCO"
-        word NCO
-        byte 2, 	"HZ"
-        word HZ
-        byte 3, 	"KHZ"
-        word KHZ
-        byte 3, 	"MHZ"
-        word MHZ
-        byte 4, 	"MUTE"
-        word MUTE
-        byte 5, 	"BLINK"
-        word BLINK
-        byte 3, 	"PWM"
-        word PWM
-        byte 3, 	"SAW"
-        word SAW
-
-
-' SMARTPIN ASYNCH
-        byte 3, 	"BIT"
-        word BIT
-        byte 4, 	"BAUD"
-        word BAUDST
-        byte 3, 	"TXD"
-        word TXD
-        byte 3, 	"RXD"
-        word RXD
-
-        byte 5, 	"TXDAT"
-        word _TXDAT
-
-{
-        byte c, 	"PA@"
-        word PAFETCH
-        byte c, 	"PB@"
-        word PBFETCH
-        byte c, 	"PA!"
-        word PASTORE
-        byte c, 	"PB!"
-        word PBSTORE
-        byte c, 	"DACLR"
-        word DACLR
-        byte c, 	"DBCLR"
-        word DBCLR
-        byte c, 	"PASET"
-        word PASET
-        byte c, 	"DASET"
-        word DASET
-        byte c, 	"PBSET"
-        word PBSET
-        byte c, 	"DBSET"
-        word DBSET
-        byte c, 	"PACLR"
-        word PACLR
-        byte c, 	"PBCLR"
-        word PBCLR
- }
-
         byte 5, 	"WAITX"
         word DELTA
         byte 7, 	"WAITCNT"
         word WAITCNTS
 
-
+{
 	byte 6,		"SETSE1"
 	word		_SETSE1
 	byte 6,		"SETSE2"
@@ -4542,7 +4518,7 @@ romdict
 	word		_WAITSE3
 	byte 7,		"WAITSE4"
 	word		_WAITSE4
-
+}
 
 
         byte 6, 	"REBOOT"
@@ -4774,6 +4750,8 @@ romdict
         word _STRING_
         byte 2+im,      $2E,$22
         word _PSTR_          ' ."
+	byte 6+im,      "PRINT",$22
+        word _PSTR_
         byte 5, 	"CTYPE"
         word CTYPE
 
@@ -4784,12 +4762,10 @@ romdict
         byte 5, 	"?EXIT"
         word IFEXIT
 
-''      byte c, 	"MOVBYTES"
-''      word _MOVBYTES
 
 ' MEMORY BLOCKS
-        byte 5, 	"DATA?"
-        word DATAQ
+''        byte 5, 	"DATA?"
+''        word DATAQ
         byte 5, 	"ERASE"
         word ERASE
         byte 4, 	"FILL"
@@ -4818,6 +4794,8 @@ romdict
         word LAPFETCH
         byte 4, 	".LAP"
         word PRTLAP
+	byte 4, 	".CLK"
+        word PRTCLK
         byte 3, 	".ms"
         word PRTMS
 
@@ -4837,7 +4815,7 @@ romdict
 ' DICTIONARY
         byte 1, 	"W"
         word QWORDS
-        byte 5, 	"WORDS"
+        byte 6, 	"WWORDS"
         word WORDS
         byte 6, 	"@WORDS"
         word ATNAMES
@@ -4848,24 +4826,6 @@ romdict
         byte 3, 	"$>#"
         word NUMBER
 
-	byte 6,		"orglen"
-	word		DATLEN
-        byte 4, 	"org@"
-        word ATDAT
-	byte 4, 	"!org"
-        word INITORG
-        byte 4, 	"HERE"
-        word ATHERE
-        byte 5, 	"@HERE"
-        word rg+here
-        byte 6, 	"@CODES"
-        word rg+codes
-
-' TABLES
-''        byte 6, 	"LOOKIN"
-''        word LOOKIN
-''        byte 6, 	"LOOKUP"
-''        word _LOOKUP
 
 
 ' VARIABLES
@@ -4891,8 +4851,8 @@ romdict
 
 
 ' | compile byte   || compile word   , compile long
-        byte 1+im,      "|"
-        word CCOMP
+'        byte 1+im,      "|"
+'        word CCOMP
         byte 2+im,      "||"
         word WCOMP
         byte 1+im,      ","
@@ -4908,14 +4868,14 @@ romdict
         word STRST
         byte 2, 	"$="
         word STREQ
-	byte 6,		">UPPER"
-	word TOUPPER
+'	byte 6,		">UPPER"
+'	word TOUPPER
 
 
 ' DEFINITIONS
 '
 
-	byte 3,      "ASM"
+	byte 3,		"ASM"
         word _ASM
 
         byte 6+im,      "FORGET"
@@ -4933,6 +4893,11 @@ romdict
         word PRIDEF
         byte 3+im,      "pre"
         word PREDEF
+	byte 6+im,      "public"
+        word PUBLIC
+	byte 7+im,      "private"
+        word PRIVATE
+
 {
         byte 6+im,      "module"
         word MODDEF
@@ -4962,7 +4927,20 @@ romdict
 
         byte 5,         "ALLOT"
         word ALLOT
+	byte 4, 	"HERE"
+        word ATHERE
+        byte 5, 	"@HERE"
+        word rg+here
+        byte 6, 	"@CODES"
+        word rg+codes
 
+
+	byte 6,		"orglen"
+	word DATLEN
+        byte 4, 	"org@"
+        word ATDAT
+	byte 4, 	"!org"
+        word INITORG
         byte 3,         "org"
         word DATORG
         byte 5+im,      "bytes"
@@ -4984,6 +4962,8 @@ romdict
         word COMPILES
         byte 4+im,	"GRAB"
         word GRAB
+	byte 3,		"[G]"
+	word GRAB
 
 
 ' FIELDS ( NAME-FIELD  CODE-POINTER CODE-FIELD )
@@ -5029,7 +5009,7 @@ romdict
 
         byte 5, 	"SPIRD"
         word SPIRD
-        byte 6, 	"SPIRDL"
+        byte 5, 	"SPIRL"
         word SPIRDL
         byte 5, 	"SPIWB"
         word SPIWR8
@@ -5054,17 +5034,25 @@ romdict
 	byte 4,		"CLKS"
 	word CLKS
 {
+	byte 5,		"SLOWK"
+	word SLOWK
+	byte 5,		"FASTK"
+	word FASTK
+}
+
+
+
         byte 5, 	"CLKIN"
         word CLKIN
         byte 6, 	"CLKOUT"
         word CLKOUT
         byte 5, 	"CLOCK"
         word CLOCK
-}
 
-        byte 5, 	"WSLED"
+{
+       byte 5, 	"WSLED"
         word WSLED
-
+}
         byte 4, 	"WAIT"
         word WAIT
 
@@ -5084,34 +5072,6 @@ romdict
 
         byte 5, 	"CLKHZ"
         word CLKHZ
-''        byte 6, 	"CLKMHZ"
-''        word CLKMHZ
-
-{
-        byte 7, 	"BUFFERS"
-        word BUFFERS
-        byte 3, 	"ROM"
-        word ROM
-        byte 6, 	"IRQVEC"
-        word IRQVEC
-
-        byte 4, 	"PTRA"
-        word w+PTRA
-        byte 4, 	"PTRB"
-        word w+PTRB
-        byte 4, 	"DIRA"
-        word w+DIRA
-        byte 4, 	"DIRB"
-        word w+DIRB
-        byte 4, 	"OUTA"
-        word w+OUTA
-        byte 4, 	"OUTB"
-        word w+OUTB
-        byte 3, 	"INA"
-        word w+INA
-        byte 3, 	"INB"
-        word w+INB
-}
 
         byte 5, 	"ERROR"
         word ERROR
@@ -5126,134 +5086,43 @@ romdict
         word SFCMD
         byte 4, 	"SFWD"
         word SFWD
-        byte    5, 	"SFSID"
+        byte 5, 	"SFSID"
         word SFSID
-        byte    5, 	"SFJID"
+        byte 5, 	"SFJID"
         word SFJID
-        byte    5, 	"SFER4"
+        byte 5, 	"SFER4"
         word SFER4
-        byte    6, 	"SFER32"
+        byte 6, 	"SFER32"
         word SFER32
-        byte    6, 	"SFER64"
+        byte 6, 	"SFER64"
         word SFER64
-        byte    7, 	"SFERASE"
+        byte 4, 	"SFER"
         word SFERALL
-	byte    8, 	"SFERPAGE"
+	byte 5, 	"SFERP"
         word SFERPAGE
-        byte    6, 	"SFWRPG"
+        byte 5, 	"SFWRP"
         word SFWRPAGE
 
-        byte    6, 	"BACKUP"
+        byte 4, 	"SFBU"
         word BACKUP
-        byte    7, 	"RESTORE"
+        byte 4, 	"SFRE"
         word RESTORE
-        byte    5, 	"SFRDS"
+        byte 5, 	"SFRDS"
         word SFRDS
 
-        byte    5, 	"SFWRS"
+        byte 5, 	"SFWRS"
         word SFWRS
-        byte    4, 	"SFC@"
+        byte 4, 	"SFC@"
         word SFCFETCH
-        byte    4, 	"SFW@"
+        byte 4, 	"SFW@"
         word SFWFETCH
-        byte    3, 	"SF@"
+        byte 3, 	"SF@"
         word SFFETCH
-        byte    2, 	"SF"
+        byte 2, 	"SF"
         word SF
-	byte    3, 	".SF"
+	byte 3, 	".SF"
         word PRTSF
 
-{
-	byte 5, 	"SDBUF"
-	word SDBUF
-''	byte 6, 	"sdpins"
-''	word _sdpins
-	byte 6, 	"SDPINS"
-	word SDPINS
-	byte 5, 	"MOUNT"
-	word MOUNT
-	byte 3, 	"DIR"
-	word PRTDIR
-	byte 2, 	"ls"
-	word LSDIR
-	byte 3, 	"!SD"
-	word INITSD
-	byte 3, 	"!SX"
-	word INITSX
-	byte 3, 	"SD?"
-	word SDQ
-	byte 3, 	"CMD"
-	word CMD
-	byte 4, 	"ACMD"
-	word ACMD
-'' DEBUGGING
-	byte 5,		"SDRES"
-	word SDRES
-	byte 6,		"SDRDBK"
-	word SDRDBK
-}
-{
-''	byte 3, 	"csd"
-''	word csd
-	byte 3, 	"cid"
-	word w+cid
-	byte 4, 	"SDRD"
-	word SDRD
-	byte 4, 	"SDWR"
-	word SDWR
-	byte 5, 	"SDRDS"
-	word SDRDS
-	byte 5, 	"SDWRS"
-	word SDWRS
-	byte 5, 	"FLUSH"
-	word FLUSH
-	byte 6, 	"FOPENS"
-	word FOPENS
-	byte 5, 	"FLOAD"
-	word FLOAD
-	byte 4, 	"FGET"
-	word FGET
-	byte 5, 	"FREAD"
-	word FREAD
-	byte 6, 	"FWRITE"
-	word FWRITE
-	byte 5, 	"FSECT"
-	word FSECT
-
-	byte 6, 	"SECTOR"
-	word SECTOR
-	byte 5, 	"SDADR"
-	word SDADR
-	byte 3, 	"SD@"
-	word SDFETCH
-	byte 3, 	"SD!"
-	word SDSTORE
-	byte 4, 	"SDC@"
-	word SDCFETCH
-	byte 4, 	"SDC!"
-	word SDCSTORE
-	byte 4, 	"SDW@"
-	word SDWFETCH
-	byte 2, 	"SD"
-	word SD
-
-''	byte 5, 	"RDFAT"
-''	word RDFAT
-	byte 4,		"ROOT"
-	word ROOT
-	byte 4, 	"@FAT"
-	word ATFAT
-	byte 5, 	"@BOOT"
-	word ATBOOT
-	byte 5, 	"@ROOT"
-	word ATROOT
-	byte 5,		"@FILE"
-	word ATFILE
-''	byte 7, 	"CL>SECT"
-''	word CLSECT
-	byte 3, 	"fat"
-	word w+fat32
-}
 
 
 
@@ -5283,3 +5152,4 @@ enddict
 |ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                         |
 +------------------------------------------------------------------------------------------------------------------------------+
 }}
+
