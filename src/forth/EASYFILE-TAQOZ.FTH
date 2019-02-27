@@ -2,52 +2,32 @@ TAQOZ
 
 \ FORGET EASYFILE.fth
 
-pub EASYFILE.fth    ." P2 EASYFILE FAT32 SD FILE SYSTEM - 190101.0000 " ;
+pub EASYFILE.fth    ." P2 EASYFILE FAT32 SD FILE SYSTEM - 190102.0000 " ;
 
+: DOT	'.' EMIT ;
+: SPINNER	;
 
-: +POLL		keypoll W! ;
+IFNDEF +POLL
+: POLLS		NOP NOP NOP NOP NOP NOP NOP NOP ;
+
+: +POLL ( cfa -- )
+	' POLLS 16 ADO DUP I W@ = I W@ ' NOP = OR IF DUP I W! LEAVE THEN 2 +LOOP DROP
+	' POLLS keypoll W!
+	;
+}
 
 --- create deallocation markers for reload
 \ DATPTR	:= efdat
 
 
+61	:= SDCK
+60	:= SDCS
+59	:= SDDI
+58	:= SDDO
+
 ( Tachyon Forth for the P2 - SD card utilities )
 
---- CVA9 microSD ( default unless changed by SDPINS )
-39    := *SDCS            --- SDCARD CS
-\ #P36    := *SDDO            --- Data out from SDCARD
-\ #P41    := *SDCK            --- SDCARD clocks
-\ #P40    := *SDDI            --- Data to SDCARD
-
-
-{
-BeMicroCV-A9            SW1
-41	CLK     CLK  	60
-40	CMD 	DI      58
-36	D0      DO      59
-37	D1
-38	D2
-39	D3	CS  	61
-}
-&39.36.40.41 	:= SDA
-
---- v27 remapped
-( SD CARD PIN ASSIGNMENTS )
-( CS.DO.DI.CK )
-&61.59.58.60	:= SDC	--- SW1 remapped standard SD boot pins
-&57.40.36.41	:= SDD	--- CVA9 ext SW1 remapped
-&56.40.36.41	:= SDE	--- CVA9 ext SW1 remapped
-
-
-{ V26
-&39.36.40.41	:= SDC	--- unmapped BeMicro CVA9 microSD
-&57.58.59.60	:= SDD	--- CVA9 ext
-&56.58.59.60	:= SDE	--- CVA9 ext
-}
-
-&15.14.13.12	:= SDF		--- DE2-115 EXT
-
-SDC		:= =sdpins	--- Default pins
+&60.58.59.61	:= =sdpins
 
 512		:= BLKSIZ
 
@@ -94,8 +74,10 @@ BUFFER	:= BUFFERS
 
 --- Detect SD card presence - the CS line must not have a pullup on it (redundant and undesirable).
 pub CARD?    ( -- flg ; Is SD card present? )
-    =sdpins 24 >> PIN
-    L 10 us F 0 DROP R H
+    =sdpins 24 >>
+    DUP LOW DUP LOW
+    DUP FLOAT 10 us DUP PIN@ SWAP HIGH
+\    L L L F 10 us R H
     ;
 
 pri SDCLK			-1 SPIWB ;
@@ -111,8 +93,8 @@ pub SDERROR ( state -- )	DROP ;
 
 pub SDPINS ( ce-miso-mosi-clk -- --- set pins, save them for reboot and init with !SDIO see high level !SD )
 	DUP			' =sdpins :=!                        --- remember which pins were used for BACKUP
-    	DUP >B			' *SDCK :=!
-	24 >>			' *SDCS :=!            --- setup SDCS mask
+    	DUP >B			' SDCK :=!
+	24 >>			' SDCS :=!            --- setup SDCS mask
 	;
 
 
@@ -205,6 +187,7 @@ pub !SD ( -- ocr|false )
 { *** BLOCK BUFFERS *** }
 
 
+
 { HELP SDWR ( src sect -- flg )
 Write to a sector in the SD card - measured 2.84ms on 4GB SanDisk
 Testing 32k write: LAP 0 FILE@ 9 >> 64 ADO DUP I SDWR DROP BLKSIZ + LOOP LAP .LAP 274.111ms ok
@@ -224,20 +207,21 @@ pub SDWR    ( src sect -- flg ; Write from src to xdst in the SD )
 	THEN
 	SPICE OFF SDBUSY
 	DUP _sdwr !							--- save write flag
+	SPICE
 	;
 
 
-
+long blksum
 --- card has been prep'd for read  - proceed and read a block of data
 --- write the current sector back to the storage media
 pri SDRDBLK ( dst -- crc|flg )
-	BLKSIZ SPIRX
+	BLKSIZ SPIRX blksum !
 	--- read crc and force as true flag
 	0 SPIRD SPIRD 1 OR
 	;
 
 \ pri ACTIVE? ( -- flg )	@scrc @ $8000.0000 <> ;
-pri ACTIVE? ( -- flg )		0 SDBUF $200 ADO I @ OR $20 +LOOP ;
+pri ACTIVE? ( -- flg )		blksum @ ; \ 0 SDBUF $200 ADO I @ OR $20 +LOOP ;
 
 --- write the current sector back to the storage media
 pub WRSECT ( -- flg )	SDBUF @sector @ SDWR ;
@@ -313,10 +297,8 @@ pub XADR ( xaddr -- addr )		L>S ( @SECTOR + ) SECTOR sdbuf + ;
 --- read and write from virtual memory address xaddr
 pub X@ ( xaddr -- long )	XADR @ ;
 pub X! ( long xaddr -- )	XADR! ! ;
-
 pub XC@ ( xaddr -- byte )	XADR C@ ;
 pub XC! ( byte xaddr -- )	XADR! C! ;
-
 pub XW@ ( xaddr -- word )	XADR W@ ;
 
 
@@ -354,17 +336,17 @@ pub @FILE ( addr -- addr+off )		FILE# 4* +  ;
 pub SDMAP ( sec secnt -- )
  	HEX
 	ADO
-	  I $3F AND 0= IF CR I .ADDR ." : " THEN
+	  I $3F AND 0= IF CRLF I .ADDR ." : " THEN
 	  I SECTOR 0 SDBUF BLKSIZ ADO I @ IF 1+ LEAVE THEN 4 +LOOP
 	  IF "*" ELSE "." THEN EMIT
 	LOOP
 	 ;
 
 pub SDMAP2 ( sec secnt -- )
-	CR ." SD SECTOR MAP - 32K/char 2MB/line"
+	CRLF ." SD SECTOR MAP - 32K/char 2MB/line"
  	HEX
 	ADO
-	  I $FFF AND 0= IF CR I .ADDR ." : " THEN
+	  I $FFF AND 0= IF CRLF I .ADDR ." : " THEN
 	  --- read 64 sectors (32kB) and display as single character
 	  0 I #64 ADO I SECTOR SDBUF BLKSIZ ADO I @ OR 4 +LOOP LOOP
 	  IF "*" ELSE "." THEN EMIT
@@ -430,7 +412,7 @@ parts    ORG
 4    res --- size
 pub .parts
 	4 0 DO I 4 SHL $1BE +
-	CR DUP C@ .BYTE SPACE
+	CRLF DUP C@ .BYTE SPACE
 	DUP 1+ C@
 	;
 
@@ -490,7 +472,7 @@ fsis
 3	res
 8	res 			--- 3: oemname
 2	res  			--- 11: byte/sect
-1	res			--- 13: sectors/cluster
+1	bytes s/c		--- 13: sectors/cluster
 2	res  			--- 14: rsvd
 --- $10 ---
 1	res  			--- 16: Copies of FAT
@@ -504,22 +486,20 @@ fsis
 \ 4	bytes capacity		--- 32: Number of sectors * byte/sect (512) = capacity
 4	res
 --- $24 ---
-4	res   			--- 36: Number of sectors per FAT table
+4	bytes s/f		--- 36: Number of sectors per FAT table
 2	res			--- 40: fatflags
 2	res			--- 42: fatver
 4	res 			--- 44: Cluster Number of the Start of the Root Directory (02 -> $4000)
 \ 2	bytes fsis		--- info = Sector Number of the FileSystem Information Sector  (from part start)
 2	res 			--- filesystem information sector
 2	res			--- boot = Sector Number of the Backup Boot Sector (from part start)
-#12	res
+12	res
 --- $40 ---
 3	res
 4	res 			--- #67 serial number of partition
-#11	res 			--- #71 volume name
+11	res 			--- #71 volume name
 8	res 			--- #82 always FAT32 - (don't trust)
 --- END $5A ---
-
-
 
 
 --- create room for some system variables in this table
@@ -547,18 +527,19 @@ fsis
 pri vbr+ 	vbr + ;
 
 
+
 pub RW?		FILE# |< _rw SET? ;
 pub RW		FILE# |< _rw SET ;
 pub RO		FILE# |< _rw CLR ;
 
 --- FAT HANDLERS ---
 
-pub @ROOT ( -- rootdirsect )		$FFFF.FFFF ;
+-1	:= @ROOT ( -- rootdirsect )
 pub ROOT 				@ROOT cwdsect ! ;
 
 --- return with the starting sector of the selected FAT (normally 0 or 1)
 pub @FAT ( fat# -- sector )
-	36 vbr+ @ *
+	s/f @ *
 	@FAT32 14 vbr+ W@ + +
 	;
 
@@ -569,13 +550,14 @@ pub @FAT ( fat# -- sector )
 --- convert cluster to sector
 pri SC* ( cluster -- sector )		6 << ;
 --- sectors/cluster
-pri S/C ( -- sectors )			13 vbr+ C@ ;
+pri S/C ( -- sectors )			s/c C@ ;
 
 pri READFAT32
 	@FAT32 SECTOR					--- Read the FAT32 boot record
 	SDBUF vbr 90 CMOVE				--- backup the FAT32 entry for direct access
 	S/C >| ' SC* C! \ clshift C!			--- make a fast multiply using a shift left constant
-	14 vbr+ W@ 36 vbr+ @ 16 vbr+ C@ *
+---
+	14 vbr+ W@ s/f @ 16 vbr+ C@ *
 	44 vbr+ @ 2- SC* + + @FAT32 + ' @ROOT :=!	--- rootdir constant
 	0 @FAT ' FAT1 :=!				--- save time by precalculating FAT table addresses
 	1 @FAT ' FAT2 :=!
@@ -588,7 +570,7 @@ pri .VOL 	71 vbr+ 11 CTYPE SPACE ;
 pri .CID	'[' EMIT cid 1+ 7 ADO IC@ $20 MAX $7E MIN EMIT LOOP ']' EMIT SPACE ;
 
 pri .FAT
-	CR ." Mounted " drive$ PRINT$ SPACE
+	CRLF ." Mounted " drive$ PRINT$ SPACE
 	--- read FAT32 boot record
 	@FAT32 SECTOR .VOL
 	--- display card & fat serial
@@ -636,14 +618,11 @@ pub MOUNT
 	THEN
 	;
 
-pub C:        SDC SDPINS " C:" DRIVE ;
-pub D:        SDD SDPINS " D:" DRIVE ;
-pub E:        SDE SDPINS " E:" DRIVE ;
-pub F:        SDF SDPINS " F:" DRIVE ;
+\ pub C:        SDC SDPINS " C:" DRIVE ;
 
 
 pri ?NEW
-	CARD? NOT
+	CARD? 0=
 	  IF mounted C~ EXIT
 	  ELSE mounted C@ 0= IF 50 ms MOUNT THEN
 	  THEN
@@ -684,23 +663,42 @@ pub ?SDCARD
 
 --- FILE NAME HANDLERS ---
 
-" FILENAME.TXT" 16 4 * STRING file$			--- The actual name of the file requested
+64 bytes file$
+
 --- file$ stores 4 8.3 filenames at 16 byte boundaries
 
 pub FILE$  ( -- addrOfFilenameString )    FILE# 4 << file$ + ;
-
-" FILENAMESTR " 0 STRING fname$                --- The formatted name of the file requested for internal use
+{
+: fname$ " FILENAMESTR     " ;                --- The formatted name of the file requested for internal use
 
 --- format friendly file name into directory format
 --- FILE.TXT --> FILE    TXT
 pri >F83 ( str1 -- str2 )
-    fname$ 11 BL FILL			--- prep fname$ as all blanks
+    fname$ 11 $20 FILL			--- prep fname$ as all blanks
     fname$ 11 + C~			--- ensure terminator is set
     fname$ BEGIN OVER C@ DUP '.' <> SWAP 0<> AND WHILE OVER C@ OVER C! 1+ SWAP 1+ SWAP REPEAT
     --- process the extension if it has one
     DROP DUP C@ IF 1+ DUP LEN$ ?DUP IF fname$ 8 + SWAP CMOVE ELSE 2DROP THEN ELSE DROP THEN
     fname$
     ;
+}
+0 bytes dirbuf
+8 bytes fname
+3 bytes ext
+1 bytes atr
+4 bytes
+
+
+pub >F83 ( str -- buf )
+	fname 12 $20 FILL  fname 11 + C~
+---	str buf
+	fname OVER LEN$ 0 DO
+	  OVER I+ C@ DUP 'a' 'z' WITHIN IF $20 - THEN
+	  DUP '.' = IF 2DROP ext ELSE OVER C! 1+ THEN
+	LOOP
+	2DROP fname
+	;
+
 
 
 --- DIRECTORY STRUCTURE ---
@@ -718,12 +716,18 @@ pri >F83 ( str1 -- str2 )
 24    := @FDATE        '' modification date
 \ #26    := @FCLST        '' First cluster of file (low word)
 28    := @FSIZE        '' size of file
-
-
-pri StartSector ( diradr -- sector )
+{
+' FSECT ( diradr -- sector ) Lookup starting sector from dir entry
+FSECT	word	w+fclstl,OVERPLUS,WFETCH,SWAP,w+fclsth,PLUS,WFETCH,W2L
+C2S	word	w+rootcl,FETCH,MINUS,w+sectclust,CFETCH,MULTIPLY,ATROOT,PLUS,EXIT
+ROOT	word	ATROOT,FOPEN1+ex
+}
+pri FSECT ( diradr -- sector )
 --- = virtual memory address of file's directory entry
-	DUP 26 + W@ SWAP 20 + W@ W>L
+---	fclstl           fclsth
+	26 OVER+ W@ SWAP 20 + W@ W>L
 \ pub CLUST>SECT ( clust# -- sector )
+---	rootcl
 	44 vbr+ @ - SC* @ROOT +
 	;
 
@@ -746,10 +750,10 @@ pub DIR?    ( str -- dirxptr>>5 | FALSE )
 	    ( str dirxptr bufptr )
 	    DUP 4TH COMPARE$ ( str dirxptr bufptr flg )
 	    IF
-              @DIRBUF BL CMOVE				--- save dir entry for FOPEN#
+              @DIRBUF 32 CMOVE				--- save dir entry for FOPEN#
 	      NIP EXIT                          	--- Found it, exit here with address
             THEN
-	    DROP BL +					--- skip to next dir entry (32 bytes)
+	    DROP 32 +					--- skip to next dir entry (32 bytes)
 	  REPEAT
 	  2DROP					--- failed to find it - discard parameters
 	THEN
@@ -766,19 +770,19 @@ pub DIR?    ( str -- diraddr>>5 | FALSE )
 	  0 ( str offset )
 	  BEGIN ( str dirptr )
 	    DUP 9 >> cwdsect @ + SECTOR			--- ensure correct sector is loaded
-	    DUP 9BITS SDBUF + DUP C@			--- terminate on null entry
+	    DUP L>S SDBUF + DUP C@			--- terminate on null entry
 	    3RD 0= OR					--- but not first one
 	  WHILE ( str index bufptr )
 	    DUP $E5 <>					--- skip deleted entries
 	    IF
-	    DUP @DIRBUF BL CMOVE			--- save in case it's successful so FOPEN# can access
+	    DUP @DIRBUF 32 CMOVE			--- save in case it's successful so FOPEN# can access
 	    dir$ 11 CMOVE				--- copy the name as a string
-	    dir$ 3RD COMPARE$
+	    dir$ 3RD $=
 	      IF NIP 5 >> cwdsect @ 4 << +  EXIT THEN	--- Found it, exit here with address
 	    THEN
-	    BL +					--- skip to next dir entry (32 bytes)
+	    32 +					--- skip to next dir entry (32 bytes)
 	  REPEAT
-	  DROP 2DROP					--- failed to find it - discard parameters
+	  3DROP					--- failed to find it - discard parameters
 	ELSE
 	  DROP
 	THEN
@@ -793,19 +797,19 @@ pub DIR?    ( str -- diraddr>>5 | FALSE )
 --- update current directory entry from buffer
 {
 pub DIR!
-	@DIRBUF diradr @FILE @ XADR BL CMOVE		--- copy that to the virtual address
+	@DIRBUF diradr @FILE @ XADR 32 CMOVE		--- copy that to the virtual address
 	WRSECT DROP					--- Force an update
 	;
 }
 pub DIR!
 	@DIRBUF diradr @FILE @				--- diradr holds 64GB address>>5 for 32-byte aligned directory entries
 	DUP 4 >> SECTOR >N 5 << SDBUF +
-	BL CMOVE		--- copy that to the virtual address
+	32 CMOVE		--- copy that to the virtual address
 	WRSECT DROP					--- Force an update
 	;
 
 --- split 6 digit decimal number into 3 two digit groups
-pri DECS ( #xxyyzz -- zz yy xx )	100 U/MOD 100 U/MOD ;
+pri DECS ( #xxyyzz -- zz yy xx )	100 U// 100 U// ;
 
 --- write to directory entry as new date
 pri +DIR! ( word field -- )		@DIRBUF + W! ;
@@ -840,7 +844,7 @@ pub FSTAMP ( -- )
      ;
 
 pri .FYEAR ( fdate -- )
-     9>> 1980 + $250A PRINTNUM
+     9>> 1980 + .AS"  ####"
      ;
 
 IFNDEF .ASMONTH
@@ -854,11 +858,11 @@ pri .FDATE ( fdate -- )
 --- 	extract day of the month to index into name string
 	DUP 5 >> .ASMONTH
 --- 	day of the month
-	$1F AND $230A PRINTNUM
+	$1F AND .AS"  ##"
 	;
 pri .FTIME ( ftime -- )
-      DUP 11 >> $20A PRINTNUM ':' EMIT
-      5 >> 6 BITS $20A PRINTNUM
+      DUP 11 >> .AS"  ##:"
+      5 >> 6 BITS .AS" ##"
      ;
 
 
@@ -868,8 +872,8 @@ pri .FTIME ( ftime -- )
 {
 --- display cluster usage from FAT
 pub .FATMAP
-     36 vbr+ @ 0 DO
-       I $3F AND 0= IF CR I .WORD SPACE  THEN
+     s/f @ 0 DO
+       I $3F AND 0= IF CRLF I .WORD SPACE  THEN
        FAT1 I+ SECTOR
        sectcrc @FILE W@
        IF '*' ELSE '.' THEN EMIT
@@ -899,9 +903,6 @@ pri CLUSTER@ ( index -- cluster )
      ;
 
 
-IFNDEF ROUNDUP/
-pub ROUNDUP/ SWAP OVER /ROUND SWAP / ;
-}
 
 { HELP CLUSTERS? ( size -- xadr )
 Find free clusters for the file size in bytes - 0 = all
@@ -909,7 +910,7 @@ return with address of first free cluster
 }
 pri CLUSTERS? ( size -- xadr )
 --- calculate clusters required
-     9>> S/C ROUNDUP/ ( clusters )
+     9>> S/C U/ ( clusters )
       0
      BEGIN
 ---	find a free cluster
@@ -969,13 +970,13 @@ pub @FWRITE ( -- writeptr )		fwrite @FILE ;
 pub FREM ( --- rem )			@FWRITE @ DUP IF FSIZE@ SWAP - THEN ;
 
 
-WORD fkey						--- backup for input device when input is switched to file
+word fkey						--- backup for input device when input is switched to file
 
 --- Read in the next character in the virtual buffer as part of the console input stream
 pri FGET ( -- ch )
     @FREAD @ FSC@					--- Read a single character
     DUP 0=
-       IF 'X' FSTAT! fkey W@ ukey W!			--- stop when null encountered and return to previous input device
+       IF 'X' FSTAT fkey W@ ukey W!			--- stop when null encountered and return to previous input device
        ELSE @FREAD ++					--- update index otherwise
        THEN
     ;
@@ -985,16 +986,16 @@ pub FPUTB ( byte -- )					--- write byte even if it is null
       FSECT@ 0<> RW? AND					--- check if file is opened and a valid write pointer is set (APPEND)
      IF							--- don't write if a file is not opened
       @FWRITE @ FSIZE@ BLKSIZ ALIGN =>			--- file full?
-         IF DROP 'O' FSTAT! EXIT THEN			--- Don't write to beyond end of file - fstat = O for OVERFLOW
+         IF DROP 'O' FSTAT EXIT THEN			--- Don't write to beyond end of file - fstat = O for OVERFLOW
 							--- still room in the file so just write it
       @FWRITE @ FSC!					--- write the character to the file
       @FWRITE @ FSIZE@ BLKSIZ ALIGN  1- =		--- last byte in file?
-         IF 'F' FSTAT! EXIT THEN			--- Warn file is now full - fstat = F for FULL, exit now!
+         IF 'F' FSTAT EXIT THEN			--- Warn file is now full - fstat = F for FULL, exit now!
 
       @FWRITE ++
        0 @FWRITE @ FSC!					--- Insert a null terminator (overwritten by the next character)
      ELSE
-       DROP 'N' FSTAT!				--- no file - fstat = N
+       DROP 'N' FSTAT				--- no file - fstat = N
      THEN
      ;
 
@@ -1034,17 +1035,19 @@ pub FCLOSE						--- Close the current file
      @sector ~~						--- clear sector (-1)
      _file @FILE ~					--- clear file pointer
      NULL$ FILE$ $!					--- blank out file name
-     @DIRBUF BL ERASE					--- wipe dir entry
+     @DIRBUF 32 ERASE					--- wipe dir entry
      ;
 
 { HELP FOPEN# ( diradr -- sector )
-Open the file pointed to by the 64GB virtual directory entry address
+Open the file pointed to by the 128GB virtual directory entry address
 aligned to 32 byte directory entries
+
+OPENDIR
 }
 pub FOPEN# ( xdiradr5 --- sector )
 	diradr @FILE !					--- save 64GB address of directory entry
 	@DIRBUF
-	StartSector
+	FSECT
 	_file @FILE !					--- save starting sector of file
 	@FREAD ~					--- Set  FREAD  to start of file sector
 	@FWRITE ~
@@ -1064,14 +1067,14 @@ pub FOPEN$ ( namestr -- sector )
      IF							--- skip null name
        DUP C@ '/' = IF 1+ THEN				--- ignore leading / in file name
        DUP LEN$ 12 >
-         IF '!' FSTAT! DROP FALSE EXIT THEN		--- abort with ! status if name is too long
+         IF '!' FSTAT DROP FALSE EXIT THEN		--- abort with ! status if name is too long
        DUP FILE$ $!					--- set the name for this file
       >F83 DIR? DUP					--- find the dir entry
         IF FOPEN#    ( sector )				--- open the file from the dir entry
-        ELSE '?' FSTAT!				--- else ? not found
+        ELSE '?' FSTAT				--- else ? not found
 	THEN
      ELSE
-       DROP FALSE '?' FSTAT!
+       DROP FALSE '?' FSTAT
      THEN
     ;
 
@@ -1080,7 +1083,7 @@ Open a file interactively with the name specified in the input stream
 Report back to the console
 }
 pre FOPEN ( <name> -- )
-    GETWORD
+    GET$
      FOPEN$ ?DUP
        IF ." ...opened at "  .LONG SPACE
        ELSE ."  not found "
@@ -1173,16 +1176,16 @@ pub RENAME$ ( new$ -- )
     ;
 
 pre RENAME ( <oldname> <newname> )
-    GETWORD FOPEN$ IF ."  to " GETWORD RENAME$ ELSE DROP ."  No file opened " THEN
+    GET$ FOPEN$ IF ."  to " GET$ RENAME$ ELSE DROP ."  No file opened " THEN
     ;
 
 pre DELETE ( <name> -- )
-     GETWORD FOPEN$ IF  THEN
+     GET$ FOPEN$ IF  THEN
      ;
 
 --- Load a file as console input - scripts or source code
 pre FLOAD ( <name> -- )
-    GETWORD FOPEN$ 0EXIT FILEIN
+    GET$ FOPEN$ 0EXIT FILEIN
     ;
 
 --- exception handler - if word not found then run from file - point unum to this code
@@ -1192,17 +1195,18 @@ pub FRUN        @WORD DUP C@ '.' = IF 1+ THEN FOPEN$ 0EXIT FILEIN ;
 pub (cat) --- type out the currently open file else ignore
      FSECT@ 0EXIT
 ---  clear any preexisting console escape
-     lastkey C~
+     char C~
      0
      BEGIN
 ---    null end of file or escape key?
-       DUP FSC@ DUP lastkey C@ $1B <> AND
+       DUP FSC@ DUP char C@ $1B <> AND
      WHILE
---- make sure all LFs are preceded by a CR
+--- make sure all LFs are preceded by a CRLF
        DUP $0A = IF $0D EMIT THEN EMIT 1+
      REPEAT
      2DROP
      ;
+
 pub FPRINT$ ( file$ -- ) --- Print the contents of the file specified by the string if it exists
      FOPEN$ 0EXIT (cat)
      ;
@@ -1211,13 +1215,13 @@ pub FPRINT$ ( file$ -- ) --- Print the contents of the file specified by the str
 { HELP cat <name>
 List the contents of the specified file
 }
-pre cat ( <name> -- ) 		[COMPILE] FOPEN CR (cat) ;
+pre cat ( <name> -- ) 		[C] FOPEN CRLF (cat) ;
 
 
 
 --- DIRECTORY PATH CONTROL ---
 
-NULL$ 11 STRING cwd$
+16 bytes cwd$
 
 pub cd$ ( dirstr -- )
      --- from root directory?
@@ -1230,7 +1234,7 @@ pub cd$ ( dirstr -- )
      DROP
     ;
 pre cd
-     GETWORD cd$
+     GET$ cd$
      ;
 
 pub pwd     '/' EMIT cwd$ PRINT$ ;
@@ -1285,8 +1289,15 @@ pri .ATR ( atr -- )
      NEXT 2DROP
     ;
 
-pri .FSIZE	@FSIZE I+ @ $2A0A PRINTNUM ;
 
+pri .FSIZE	@FSIZE I+ @ .AS"  9|\#" ;
+--- 9999 or 26k or 9.9M or 3.4G
+pri .SIZE
+	DUP 10,000 < IF .DEC4 EXIT THEN
+	DUP 1,000,000 < IF 1,000 / .AS" ##`#k" EXIT THEN
+	DUP 1,000,000,000 < IF 1,000,000 / .AS" ##`#M" EXIT THEN
+	100,000,000 /  .AS" #.#G"
+	;
 ( FIRMWARE.ROM .....a 0000.620A    07/07/2014 11:58:14   5,536 )
 
 pri .DIR ( addr -- )
@@ -1298,17 +1309,17 @@ pri .DIR ( addr -- )
 --- 	print attributes as alphas
        SPACE DUP @ATR + C@ .ATR SPACE
 --- 	print sector number
-      DUP StartSector .LONG
+      DUP FSECT .LONG
        4 SPACES DUP @FDATE + W@  DUP .FDATE
-       SPACE .FYEAR
-       SPACE @FTIME + W@ .FTIME
-       SPACE .FSIZE
+       .FYEAR
+       @FTIME + W@ .FTIME
+       .FSIZE
      ELSE
         DROP ." *CLOSED*"
      THEN
     ;
 
-pri (.DIR) I CR .DIR ;
+pri (.DIR) 	I CRLF .DIR ;
 
 
 {
@@ -1318,7 +1329,7 @@ NAME    .EXT ATRS   SECTOR     DATE       TIME       SIZE
 CE1372  .JPG .....a 0000.7C17    20/06/2013 02:36:52   736,486
 }
 
-WORD udir
+word udir
 
 pub (SLIST) ( method -- )
     udir W!
@@ -1334,7 +1345,7 @@ pub (SLIST) ( method -- )
            IC@ $80 < AND            	--- but ignore if 1st character has 8th bit set
            IC@ '?' <> AND            	--- ignore "deleted" entries
             IF udir W@ CALL THEN        --- all good, list this one using the directed method
-         BL +LOOP                    	--- next dir entry 32 bytes (assumes standard 8.3)
+         32 +LOOP                    	--- next dir entry 32 bytes (assumes standard 8.3)
        ELSE
          LEAVE                    	--- no more dir sectors - leave loop
        THEN
@@ -1343,22 +1354,22 @@ pub (SLIST) ( method -- )
 
 pri (DIR) ( code -- )
     ?MOUNT
-     CR drive$ PRINT$ pwd .VOL
+     CRLF drive$ PRINT$ pwd .VOL
      (SLIST)
      ;
 pub DIR
 ---         CE1372  .JPG .....a 0000.7C17    20/06/2013 02:36:52   736,486
----  CR ." NAME    .EXT ATRS   SECTOR       DATE       TIME       SIZE "
+---  CRLF ." NAME    .EXT ATRS   SECTOR       DATE       TIME       SIZE "
     ' (.DIR) (DIR) --- use this method for listing the directory
     ;
 
 --- Print the file name at the current loop index I
 pub .FNAME ( --- )
-     IC@ BL >                            --- skip invalid index/entry
+     IC@ 32 >                            --- skip invalid index/entry
      IF
        $10 @ATR I+ SET? IF '[' EMIT THEN
        11 0 DO
-         J I+ C@ DUP BL > IF I 8 = IF '.' EMIT THEN DUP EMIT THEN DROP
+         J I+ C@ DUP 32 > IF I 8 = IF '.' EMIT THEN DUP EMIT THEN DROP
        LOOP
        $10 @ATR I+ SET? IF ']' EMIT THEN
      THEN
@@ -1383,14 +1394,14 @@ LEXICON .TXT   WARWORLD.TXT   VALIANT .WAD     ok
 }
 pri (ls)
 --- 5 files per line
-     lscnt C@ 5 MOD 0= IF CR THEN
+     lscnt C@ 5 // 0= IF CRLF THEN
 --- format a directory name
      $10 @ATR I+ SET?
      IF
        '[' EMIT I 8 CTYPE ']' EMIT 5 SPACES             --- Use [ ] to enclose name
      ELSE
        I 8 CTYPE                             --- normal, print name and opt ext
-       8 I+ C@ BL <>
+       8 I+ C@ 32 <>
          IF  DOT 8 I+ 3 CTYPE 3 SPACES ELSE 7 SPACES THEN
      THEN
      lscnt C++
@@ -1398,33 +1409,33 @@ pri (ls)
 
 --- List a single directory entry in FTP compatible format
 pri (.LIST) ( <index> )
-      ." -rwxrwxrwx 1 502     500"				// dummy permissions
-      .FSIZE				// print file size "1048576"
+      ." -rwxrwxrwx 1 502     500"				--- dummy permissions
+      .FSIZE				--- print file size "1048576"
       SPACE
-      @FDATE I+ W@ .FDATE					// DATE "24"
+      @FDATE I+ W@ .FDATE					--- DATE "24"
 
 --- most systems expect either the time or the year if it is older than 6 months
        .UTIME
-       SPACE .FNAME CR						// FILE NAME "LOG0001.TXT"
+       SPACE .FNAME CRLF						--- FILE NAME "LOG0001.TXT"
     ;
 
-pub .LIST        ' (.LIST) (SLIST) ;				// set list method
+pub .LIST        ' (.LIST) (SLIST) ;				--- set list method
 
 
 --- list the directory in wide and simple format
 --- ls -l in long format
 
 pre ls
-     delim 1+ C@ BL =
+     delim 1+ C@ 32 =
      IF
-       GETWORD " -l" $=
-       IF CR .LIST EXIT THEN
+       GET$ " -l" $=
+       IF CRLF .LIST EXIT THEN
      THEN
      lscnt C~ ' (ls) (DIR)
     ;
 
 
-pub .FX				CR ." #" DUP PRINT SPACE FILE @DIRBUF .DIR ;
+pub .FX				CRLF ." #" DUP PRINT SPACE FILE @DIRBUF .DIR ;
 pub .FILE			FILE# .FX ;
 
 pub .FILES			FILE# 4 0 DO I .FX LOOP FILE  ;
@@ -1434,7 +1445,7 @@ pub .FILES			FILE# 4 0 DO I .FX LOOP FILE  ;
 Quick view of file header in ASCII dump format
 QV<cr> will display current file if opened
 }
-pre QV  delim 1+ C@ BL = IF GETWORD DUP C@ IF FOPEN$ THEN DROP THEN FSECT@ 0EXIT 0 $400 FS DUMPA ;
+pre QV  delim 1+ C@ 32 = IF GET$ DUP C@ IF FOPEN$ THEN DROP THEN FSECT@ 0EXIT 0 $400 FS DUMPA ;
 
 
 {  SD BOOTLOADER
@@ -1475,14 +1486,14 @@ TF2# $34 x@ . 160617 ok
 
 --- backup memory into P2BOOT.IMG for the size specified in k and setup sector 0
 --- takes around 7 seconds on CV-A9 at 80MHz for 1MB image ~= 3ms/blk or 0.5sec for 64k
-pub SAVE
+pub SAVE 128
 pub SDBACKUP ( kbytes -- )					--- size in kilobytes where 128 = 128k
-	" P2BOOT.IMG" FOPEN$					--- try to open default boot image but exit if failed
+	" _BOOT_P2.BIX" FOPEN$					--- try to open default boot image but exit if failed
 	IF
 	  1 MAX 1024 MIN 10 <<					--- limit between 1k and 1M and shift up kbytes to bytes
 	  FSECT@ 0 3RD						--- use raw file's starting sector from start for size
 	    ADO I OVER SDWR DROP 1+ SPINNER BLKSIZ +LOOP DROP	--- write the image with a little spinning progress symbol | / - \
-	  @DIRBUF 0 XADR BL CMOVE				--- make a copy of the directory entry for reference and detection in sector 0
+	  @DIRBUF 0 XADR 32 CMOVE				--- make a copy of the directory entry for reference and detection in sector 0
 	  FSECT@ $20 X!                      			--- Setup a pointer to the raw file starting sector
 	  DUP $24 X!						--- write the file size we are using
 	  diradr @FILE @ $28 X!					--- save 64GB encoded pointer to the directory entry
@@ -1497,7 +1508,7 @@ pub SDBACKUP ( kbytes -- )					--- size in kilobytes where 128 = 128k
 
 {
 
-WORD sdtask
+word sdtask
 
 pub SD.TASK
 	!SP !FS NULLOUT
@@ -1532,8 +1543,18 @@ TAQOZ# LAP 0 SECTOR LAP .LAP 89313 cycles = 1.116ms  ok
 TAQOZ# LAP 1 SECTOR LAP .LAP 73745 cycles = 921.812us ok
 }
 
+{
+Ideal directory structure - non MS
+filename(11)
+atr(1)
+first sector(4)
+sectors allocated(4)
+bytes used(4)
+created(4)
+modified(4)
+flags(4)
+(32)
 
-\ SDATE@ build.date E! TIME@ build.time E!
-]~
+}
 END
 \ !FS
