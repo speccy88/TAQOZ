@@ -1,23 +1,15 @@
-TAQOZ
+\ : PBJ
+TAQOZ ( 6,314 bytes )
+!SP 11 22 33 --- check stack
+pub .VER		." 190225-1700  " ^V KEY! ;
+
 
 {
 TAQOZ V1.1 EXTENSIONS
 V1.2 integrates kernel components
-
+V2 has new kernel
 }
 
-pre '' [C] \ ;
-pre *** [C] \ ;
-
-{ NOTE - built back into kernel and into ; word as the immediate word EXIT
---- Compiles an EXIT but first tries to modify a threaded call to a jump
-pre EXITS
-	@CODES W@ 2- W@ $800 ' !SP WITHIN
-	IF @CODES W@ 2- DUP W@ 1 OR SWAP W!
-	ELSE ' EXIT [C] [W]
-	THEN
-	;
-}
 
 {
 --- set new cfa to point back to DOES: code (skipped by DOES: itself)
@@ -28,8 +20,18 @@ pub CREATE	HERE [C] CREATE: [C] GRAB HERE 0 REG W! 0_0 [W] ;
 pre Q  CREATE [W] DOES> W@ . ;
 }
 
-( P2 CONTROL )
 
+\ ALIAS <for> <as>
+\ pre ALIAS	[C] NFA' [G] DUP CPA W@ [C] CREATE$ @WORDS C@++ $1F AND + W!   C@ $E0 AND @WORDS C+! ;
+
+--- alternative comment for titles
+
+pre *** [C] \ ;
+\ ALIAS \ ***
+
+
+( P2 CONTROL )
+public
 $1FA := DIRA
 $1FB := DIRB
 $1FC := OUTA
@@ -51,13 +53,14 @@ sd_di		=	spi_di
 sd_do		=	spi_do
 }
 
+private
 61	:= SDCK
 \ 60	:= SDCS
 59	:= SDDI
 58	:= SDDO
-\ : CHECK SDDI HIGH SDCS HIGH 96 FOR SDCK LOW SDCK HIGH NEXT  .SF ;
-\  40 P2MHZ SF? 180 P2MHZ DROP
 
+
+private
 6	:= KBCLK
 7	:= KBDAT
 8	:= SCL
@@ -71,14 +74,11 @@ sd_do		=	spi_do
 26	:= USB-
 25	:= USB1+
 24	:= USB1-
-23	:= WIZCE	--- W5500 Ethernet
-22	:= WIZDO
-21	:= WIZDI
-20	:= WIZCK
-
-&23.22.21.20	:= @wizpins
 
 
+\ $1.F000		:= BUFFER
+
+{
 *** EFM88BB10F CHIP ***
 57	:= BB02
 56	:= BB01
@@ -88,93 +88,412 @@ sd_do		=	spi_do
 52	:= C2CK
 51	:= C2D
 50	:= BB13
-
-{
-BUGS?
-HUBEXEC COG@ in COG DUMP crashes  ( CALL BUG )
-$15 IN COG MEMORY ERROR
 }
 
-( CLOCK MODES )
----	 1098_7654_321098_7654321098_7654_32_10
----	 0000_000E_DDDDDD_MMMMMMMMMM_PPPP_CC_SS
-long _clk  \  _clk ~
-long _fin
---- set the
-: CLKSET 	_clk @ DUP $18 ! HUBSET ;
-( PLL should run between 100 to 200MHz )
-: CLK! ( data mask -- )	_clk @ SWAP ANDN OR _clk ! ;
-: PLLEN		24 |< _clk SET ;
-: PLLOFF	24 |< _clk CLR ;
+--- some common constants
+public
+64 KB		:= 64KB
+1,000,000	:= 1M
 
-: XIDIV ( 1..64 -- ) 	1- $3F AND 18 << $00FC0000 CLK! ;
-( ends up as multiply)
-: VCOMUL ( 1..1024 -- ) 1- $3FF AND 8 << $3FF00 CLK! ;
---- Divide the PLL by 1 2 4 6 ... 30 for the system clock when SS = %11
-: PLLDIV ( 2..30 -- ) 	2/ 1- $0F AND 4 << $0F0 CLK! ;
-: CLKSRC	CLKSET DUP 1 > IF 200,000 WAITX THEN 3 AND 3 CLK! CLKSET ;
+pub RUN ( task cog -- )		DUP NEWCOG 2000 WAITX TASK W! ;
 
-: USEPLL 	3 CLKSRC ;
-: USEXTAL	2 CLKSRC ;
-: RCSLOW	1 HUBSET _clk ~ ;
-: RCFAST	0 HUBSET _clk ~ ;
+( to use: ' <mytask> 1 RUN )
 
-: CC		3 AND 2 << $0C CLK! ;
-: 15PF		2 CC ;
-: 30PF		3 CC ;
-: 0PF		1 CC ;
-: XPF		0 CC ;
+private
+long _el
+byte _sp
+pri SPINNER
+---	check if enough time has elapsed -  then update
+	CNT@ _el @ - ABS CLKHZ 10 / > 0EXIT CNT@ _el !
+---	output next char and backspace
+	_sp C@ 3 AND " |/-\" + C@ EMIT 8 EMIT _sp C++
+	;
 
-\ 12000000	:= _xin
-\ : XIN		' _xin :=! ;
-: _xin		4 @ $452D_3250 = IF 20,000,000 ELSE 12,000,000 THEN ;
+pub .BITS ( n bits -- ) 	FOR DUP 1& . 2/ NEXT DROP ;
 
- 	*** SERIAL MODES ***
+pub .BYTES ( adr bytes -- )	ADO I C@ .BYTE SPACE LOOP ;
 
-\ : DL		tepin COG@ ;
-long dl
-: BIT ( n -- )		1- dl ! ; --- Set bit length of serial smartpin interface
+pub #c		',' ;
 
-: TXD			H $7C
-: BAUD ( baud mode -- )	WRPIN CLKHZ SWAP U/ 16<< dl @ 0= IF 8 BIT THEN dl @ + WXPIN H ;
-: RXD			$3E BAUD ;
+--- process all digits for printing from right to left while inserting commas every third digit
+pri #S, ( val -- 0 )
+	0 SWAP
+	BEGIN
+---	while double not zero and not first digit
+	  DUP 12 REG @ OR 3RD 0= OR
+	WHILE
+---	  after 1st check group if comma
+	  OVER IF OVER 3 // 0= #c 0<> AND IF #c HOLD THEN THEN
+---	  prepend a digit and increment digit count
+	  # b++
+	REPEAT
+	NIP
+	;
+--- print a double number
+pub D.				0
+--- print a double number right justified
+pub D.R ( dval. digits -- )	SWAP <D>
+pub U.R ( val digits -- )	>R <# #S, #> R> OVER LEN$ - 0 MAXS SPACES PRINT$ ;
+
+--- print bytes as kilobytes
+pri .KB				DUP 10 >> IF 10 >> .AS" *|kB" ELSE .AS" *|B" THEN ;
+
+\ pub OP 				21 << ' OP2 COG@ $0FE0.0000 ANDN OR ' OP2 COG! OP2 ;
+
+pub $= ( str1 str2 -- flg )
+	OVER LEN$ OVER LEN$ =
+	IF
+	  DUP LEN$
+pub C$= ( adr1 adr2 len -- flg )
+	  ADO C@++ IC@ <> IF 0= LEAVE THEN LOOP
+	  0<>
+	BREAK
+	2DROP FALSE
+	;
+
+private 32 bytes V$
+
+pub $+ ( str1 str2 -- str1 )	OVER DUP LEN$ + OVER LEN$ 1+ CMOVE ;
+
+--- replace the inline 10-bit literal with a new value
+pub >!				$3FF AND $F800 + R> W! ;
+{
+pub WORDS ( cnt -- )
+	0 @WORDS DUP .ADDR
+	BEGIN ( cnt width words )
+	  OVER 72 > IF DUP .ADDR NIP 0 SWAP THEN
+	 \ 3RD IF ROT 1- -ROT 3RD 0<> OVER C@ 0<> AND
+	  DUP C@
+	WHILE ( cnt width words )
+	  DUP C@ $1F AND 1+ ROT + SWAP
+	  DUP C@++ $1F AND CTYPE SPACE CPA 2+
+	REPEAT
+	2DROP
+	;
+}
+
+IFDEF WORDS
+: WWORDS	WORDS ;
+}
+pub WORDS
+	@WORDS
+	BEGIN ( cnt width words )
+	  DUP .ADDR
+	  DUP C@
+	WHILE ( cnt width words )
+	  DUP CPA W@ .W
+	  DUP C@ 5 >> DUP 3 + SPACES 3 * " pub-1-pri-3-pre-5--6--7-" + 3 CTYPE
+	  SPACE
+	  DUP C@++ $1F AND CTYPE
+	  CPA 2+
+	REPEAT
+	DROP
+	;
 
 
 
+{
+
+pub WORDS ( cnt -- )
+	0 @WORDS DUP .ADDR
+	BEGIN
+	  OVER 90 > IF CRLF NIP 0 SWAP THEN
+	  3RD IF ROT 1- -ROT 3RD 0<> OVER C@ 0<> AND
+	WHILE ( cnt width words )
+	  DUP C@ $1F AND 1+ ROT + -ROT
+	  DUP C@++ $1F AND CTYPE SPACE CPA 2+
+	REPEAT
+	2DROP
+	;
+	             track maximum line width & clear words & word count
+WORDS   word    rg+spincnt,CLRL
+MWORDS
+	word	ATNAMES,DUP,PRTADR
+''		new line?
+.l0     word    rg+spincnt+1,CFETCH,w+90,GT,_IF+03,CRLF,rg+spincnt+1,CLRC
+	word	rg+spincnt,CFETCH,_IF+05,rg+spincnt,DUP,CDEC,CFETCH,_IF+19
+        word    DUPCFT,_IF+17
+        word    rg+spincnt+2,WINC
+        ''       track width '
+        word    DUPCFT,w+cntm,_AND,INC,rg+spincnt+1,CPLUSST
+        word    DUP,CFETCHINC,w+cntm,_AND,CTYPE,SPACE,NFACPA,INC2,.l0+ex
+
+        word    DROP,rg+spincnt+2,WFETCH,SPACE,PRTDEC+ex
+
+QWORDS	word	w+80,rg+spincnt,STORE,MWORDS+ex
+
+}
+
+
+
+
+
+
+private
 long _pinmode
 IFDEF PIN
 'p' NFA' PIN 1+ C! --- rename PIN to pIN to make way for new def
 }
 
-: PIN		pIN _pinmode ~ ;
+pub PIN		pIN _pinmode ~ ;
 
-: CONBAUD		DUP $1C ! 63 PIN DUP RXD 62 PIN TXD ;
+--- type out printable characters or substitute with a dot
+\ pub CTYPE ( adr cnt -- )	ADO I C@ .EMIT LOOP ;
 
+pri .OK		IF ."  OK!" THEN ;
 
---- Set P2 CLOCK to selected MHZ ( simple PLL settings only )
-: CLOCK ( HZ --- )
-	$14 !
-	  15PF PLLEN _xin 1,000,000 U/ XIDIV CLKHZ
-	  1,000,000 U/ VCOMUL 1 PLLDIV USEPLL
-	$1C @ CONBAUD
+pri .SUCCESS
+	SPACE IF ." SUCCESS!" BREAK ." ERROR!"
 	;
 
-: P2MHZ		M CLOCK ;
 
-: SLOW		40 P2MHZ ;
-: ECO		80 P2MHZ ;
-: CRUISE	180 P2MHZ ;
-: TURBO		250 P2MHZ ;
-: RACE		300 P2MHZ ;
-: HYPER		340 P2MHZ ;
-: FLANK		360 P2MHZ ;
+--- redirect (using uemit/ukey) all character I/O to the code that follows
+pub EMIT:			R> uemit W! ;
+pub KEY:			R> ukey W! ;
+--- null output device - discard data
+pub NULL			EMIT: DROP ;
+
+
+--- create a table of preallocated bytes
+pre TABLE ( bytes -- ) ( -- addr )
+	HERE 2+ [G]
+---	create name and allow bytes
+	[C] CREATE: DUP ALLOT
+---	erase any allocated bytes
+	?DUP IF ERASE ELSE DROP THEN
+	;
 
 
 {
---- setup for P2-ES instead
-: P2-ES		20,000,000 XIN ;
-: P2D2		12,000,000 XIN ;
+'**************** configuration block **************** '
+$00004
+
+		byte	"P2-ES   "		' 8 character ID'
+_OPTIONS	byte	%0000_0011		' options    SD,FLASH
+		byte	0,0,0
+
+'	*** CLOCK ***	'
+''$10
+_XIN		long	XIN			' input freqency'
+_CPUHZ		long	CPUHZ			' final clock '
+_CLKCFG		long	CLKCFG	''$014CB3FC 'CLKCFG
+
+'	*** SERIAL/VGA/KEYBOARD *** '
+_BAUD		long	baud_rate
+_VGACFG		long	vgapins			' VGA CONFIG '
+		long	vspin
+_VGAINIT	long	@vgainit		' VGA code '
+_KBCFG		long	kbpins
+		long	0
+
+'	*** RESET VECTORS *** '
+_RESET		long	@RESET
+_IDLE		long	@IDLE
+_TERMINAL	long	@TERMINAL		' COG0 TASK'
+_COG1		long	0			' COG1 TASK ( 0=none )
+_COG2		long	0
+_COG3		long	0
+_COG4		long	0
+_COG5		long	0
+_COG6		long	0
+_COG7		long	0
+
+$14	:= _cpuhz
+$18	:= _clkcfg
+$1C	:= _baud
+$20	:= _vgacfg
+$24	:= _vspin
+$28	:= @vgainit
+$2C	:= kbpins
+\ $30
+$34
 }
+
+
+ 	*** SERIAL MODES ***
+{
+115200 RXD		--- 115200 baud (default 8-bit) receive
+9 -bit 1 M TXD		--- 9-bit 1 megabaud transmit
+
+}
+
+pri dl				7 ; --- bit length of asynch serial smartpin interface
+pub -bit ( n -- )		1- ' dl C! ;
+pub TXD ( baud -- )		$7C
+pri BAUD ( baud mode -- )	WRPIN CLKHZ SWAP U/ 16<< ( dl 0= IF 8 BIT THEN ) dl + WXPIN H 8 -bit ;
+pub RXD ( baud -- )		$3E BAUD ;
+---				config save	set rxd mode & tx mode
+pub CONBAUD ( baud -- )		DUP $1C !  	63 PIN DUP RXD 62 PIN TXD ;
+
+
+
+
+
+		*** P2 CLOCK CONTROL ***
+
+
+( CLOCK MODES )
+---	 1098_7654_321098_7654321098_7654_32_10
+---	 0000_000E_DDDDDD_MMMMMMMMMM_PPPP_CC_SS
+public
+long _clk  \  _clk ~
+private
+long _fin
+--- set the
+pub CLKSET			_clk @ DUP $18 ! HUBSET ;
+( PLL should run between 100 to 200MHz )
+
+--- Usage: 30 pf or 15 pf or 0 pf or -15 pf to disable
+pri pf ( pf -- )		15 / 1+   3 AND 2 << $0C
+pri CLK! ( data mask -- )	_clk @ SWAP ANDN OR _clk ! ;
+pub PLLEN			24 |< _clk SET ;
+pub PLLOFF			24 |< _clk CLR ;
+
+pub XIDIV ( 1..64 -- )		1- $3F AND 18 << $00FC0000 CLK! ;
+( ends up as multiply)
+pub VCOMUL ( 1..1024 -- )	1- $3FF AND 8 << $3FF00 CLK! ;
+--- Divide the PLL by 1 2 4 6 ... 30 for the system clock when SS = %11
+pub PLLDIV ( 2..30 -- ) 	2/ 1- $0F AND 4 << $0F0 CLK! ;
+pub CLKSRC			CLKSET DUP 1 > IF 200,000 WAITX THEN 3 AND 3 CLK! CLKSET ;
+
+pub USEPLL			3 CLKSRC ;
+pub USEXTAL			2 CLKSRC ;
+pub RCSLOW			1 HUBSET _clk ~ ;
+
+
+--- Set P2 CLOCK to selected MHZ ( simple PLL settings only )
+
+pub CLOCK ( HZ --- )
+---	align to multiples of XIN
+	$10 @ U/ $10 @ *
+pri CLOCK1
+	$14 ! _clk ~
+---	defaults of 15pF and an XI divide of 1
+	  15 pf PLLEN 1 XIDIV
+---	then multiply up the base input frequency
+	  CLKHZ 16 @ U/ VCOMUL
+---	default PLL divider of 1 and enable
+	  1 PLLDIV USEPLL
+---	reload to calculate baud rate setting
+	$1C @ CONBAUD
+---	VGA clock settings
+	25 M CLKHZ 1M U/ U/ 2* 30 |< 1M */ $2C !
+	;
+
+---			nominal rcfast freq ( Use <new value> ' RCFAST 2+ ! )
+pub RCFAST		22,400,000	CLOCK1 0 HUBSET _clk ~ ;
+
+pub P2MHZ		M CLOCK ;
+
+\ pub IDLE		40 P2MHZ ;
+pub COAST		120 P2MHZ ;
+pub CRUISE		180 P2MHZ ;
+\ pub FAST		240 P2MHZ ;
+pub TURBO		300 P2MHZ ;
+
+
+
+			*** SMART PINS ***
+
+
+{
+                     PIN CONTROL
+       1098_7654_321_0987654321098_76_54321_0
+D/# = %AAAA_BBBB_FFF_PPPPPPPPPPPPP_TT_MMMMM_0
+
+PIN MODE 13 BITS
+CIO HHH LLL
+
+ PIN DRIVE MODES
+
+1K5 SOURCE NO SINK
+OPEN SOURCE FAST SINK
+1K5 SOURCE FAST SINK
+OPEN DRAIN
+}
+
+			*** PIN DRIVE MODES ***
+
+
+pub FAST			0 ;
+pub 1K5				1 ;
+pub 15K				2 ;
+pub 150K			3 ;
+pub 1ma				4 ;
+pub 100ua			5 ;
+pub 10ua			6 ;
+pub OPEN			7 ; ( float )
+
+pub CLOCKED			$100
+pri 14P				14
+pri PINM			<< _pinmode SET ;
+
+pub !IN				$80 14P ; --- inverted input
+pub !OUT			$40 14P ;
+pub DRAIN
+pub SOURCE			11 PINM ;
+pub SINK			8 PINM ;
+
+
+
+pub WRFNC ( MMMMM -- )		F 2* _pinmode @ OR WRPIN L ;
+
+pub MUTE			F 0 WRPIN ;
+\ : NCOCNT ( hz -- cntval )	CLKHZ SWAP U/ 0 1 ROT UM// DROP NIP ;
+\ : NCOCNT ( hz -- cntval )	CLKHZ 4 << SWAP U/ 0 $10 ROT UM// DROP NIP ;
+pub NCOCNT ( hz -- cntval )	CLKHZ 4 << SWAP U/ $10.0000.0000. ROT UM// DROP NIP ;
+
+\ : NCOCNT ( hz -- cntval )	CLKHZ SWAP 2* U/ $8000.0000 SWAP U/ ;
+pub MHZ				1000 *
+pub KHZ				1000 *
+pub HZ				NCOCNT
+pub NCO				%1_00110
+pub SETNCO ( val mode --)	WRFNC 1 WXPIN WYPIN ;
+
+pub DUTY ( val -- )		%01_00111 SETNCO ;
+
+pub BLINK ( pin -- )		PIN 2 HZ ;
+
+pub PWM ( duty frame div -- )	%1_01001
+pri PWM!			WRFNC SWAP 16<< OR WXPIN WYPIN ;
+pub TRI ( duty frame div -- )	%01_01000 PWM! ;
+pub SMPS ( duty fram div -- )	%01_01010 PWM! ;
+
+--- convert nanoseconds to counter value based on CLKHZ
+pub ns				1000 * 1,000,000,000,000. CLKHZ UM// DROP NIP U/ ;
+
+pub PW ( width -- )		%01_00101 WRFNC WXPIN ;
+
+pub PULSE				1
+pub PULSES ( cnt -- )		WYPIN ;
+pub HILO ( high low -- )		%01_00100 WRFNC SWAP OVER+ SWAP 16<< OR WXPIN ;
+
+
+
+
+( SMART PINS )
+{
+ %AAAA_BBBB_FFF_PPPPPPPPPPPPP_TT_MMMMM_0
+}
+
+
+\ ' 12-bit analog to digital to analog, 19.5k samples/second
+
+pub DAC ( bits -- )		%101_000_0000000_01_00011 WRFNC |< WXPIN ;
+\ pub V ( volts*1000 --- )	$1.0000 3300 */ WYPIN ;
+pub V ( volts*1000 --- )	16 << 3300 U/ WYPIN ;
+
+pub ADC ( cycles -- )		%100_011_0000000_00_01111 WRFNC WXPIN 0 WYPIN ;
+
+private 64 words amin	64 words aref
+pri AREF			@PIN 2* aref + ;
+pri AMIN			@PIN 2* amin + ;
+pub SETADC ( min ref -- )	AREF W! AMIN W! ;
+pub VOLTS@ ( -- volts*1000 )	RDPIN AMIN W@ - 1000 AREF W@ */ ;
+}
+
+
+( 40 PIN 40,000 ADC 7191 7675 SETADC )
 
 
 { TRANSMITTING ASYNCH
@@ -187,7 +506,7 @@ TAQOZ# @NAMES 4 TXDAT  ok
 ' D/# = %AAAA_BBBB_FFF_PPPPPPPPPPPPP_TT_MMMMM_0
 ' 11100*  = sync serial transmit         (A-data, B-clock)
 }
-: SYNTX ( bits --- )		L $100.0078 WRPIN 1- $20 OR WXPIN ;
+\ pub SYNTX ( bits --- )		L $100.0078 WRPIN 1- $20 OR WXPIN ;
 
 {
 pub TX		WYPIN ;
@@ -198,99 +517,15 @@ pub SERIAL ( pin -- )           PIN ' TX uemit W! ;
 
 
 
-			*** SMART PINS ***
-{
-                     PIN CONTROL
-       1098_7654_321_0987654321098_76_54321_0
-D/# = %AAAA_BBBB_FFF_PPPPPPPPPPPPP_TT_MMMMM_0
-
-PIN MODE 13 BITS
-CIO HHH LLL
-}
 
 
-*** PIN DRIVE MODES ***
-%000	:= FAST
-%001	:= 1K5
-%010	:= 15K
-%011	:= 150K
-%100	:= 1ma
-%101	:= 100ua
-%110	:= 10ua
-%111	:= OPEN		--- OPEN (FLOAT)
-$100	:= CLOCKED
-$80	:= !IN		--- inverted input
-$40	:= !OUT
+public
+ukey 2+		:= keypoll
+ukey 14 +	:= flags
+delim 4 +	:= uprompt
+delim 6 +	:= uaccept
+delim 16 +	:= unum
 
-: SOURCE	3 <<
-: SINK		8<< _pinmode SET ;
-: DRAIN		SOURCE FAST SINK ;
-
-{
-1K5 SOURCE NO SINK
-OPEN SOURCE FAST SINK
-1K5 SOURCE FAST SINK
-OPEN DRAIN
-}
-
-
-
-: WRFNC ( MMMMM -- )		2* _pinmode @ OR WRPIN ;
-: MUTE				F 0 WRPIN ;
-\ : NCOCNT ( hz -- cntval )	CLKHZ SWAP U/ 0 1 ROT UM// DROP NIP ;
-: NCOCNT ( hz -- cntval )	CLKHZ 4 << SWAP U/ 0 $10 ROT UM// DROP NIP ;
-
-\ : NCOCNT ( hz -- cntval )	CLKHZ SWAP 2* U/ $8000.0000 SWAP U/ ;
-: MHZ				1000 *
-: KHZ				1000 *
-: HZ				NCOCNT
-: NCO				%1_00110
-: SETNCO ( val mode --)		L WRFNC 1 WXPIN WYPIN ;
-
-: DUTY ( val -- )		%01_00111 SETNCO ;
-
-: BLINK ( pin -- )		PIN 2 HZ ;
-
-: PWM ( duty frame div -- )	%1_01001
-: PWM!				L WRFNC SWAP 16<< OR WXPIN WYPIN ;
-: TRI ( duty frame div -- )	%1_01000 PWM! ;
-: SMPS ( duty fram div -- )	%1_01010 PWM! ;
-
-{
-'--- TRIANGLE PWM MODE
-' PWM ( duty frame div -- )     @PIN LOW $50 WRPIN SWAP 16 << + WXPIN WYPIN ;
-PWM     word    w+$50
-PWM1    word    L,_WRPIN,SWAP,_SHL16,PLUS,_WXPIN,_WYPIN,EXIT
-SAW     word    w+$52,PWM1+ex
-' SAW ( duty frame div -- )     @PIN LOW $50 WRPIN SWAP 16 << + WXPIN WYPIN ;
-}
---- convert nanoseconds to counter value based on CLKHZ
-: ns				1000 * $D4A5.1000 $E8 CLKHZ UM// DROP NIP U/ ;
-\ : ns				1000 * 1,000,000,000,000 CLKHZ UM// DROP NIP U/ ;
-
-: PW ( width -- )		L %01_00101 WRFNC WXPIN ;
-
-: PULSE				1
-: PULSES ( cnt -- )		WYPIN ;
-: HILO ( high low -- )		L %01_00100 WRFNC SWAP OVER+ SWAP 16<< OR WXPIN ;
-
-
-
-
-{
-: .CLK
-	CLKHZ 1 M // 0=
- 	IF CLKHZ 1 M U/ . ." MHz" ELSE CLKHZ .DECL ." Hz" THEN
- ;
-
-: .LAP
-	LAP@ LAP LAP LAP@ -
-	( cycles/clkhz )
-	DUP .DECL ."  cycles = "
-	1,000,000 CLKHZ 1000 U/ */  ( scale cycles to nanoseconds )
-	.DECL ." ns @" .CLK
-	;
-}
 
 {
 @org		org
@@ -344,33 +579,6 @@ dmp             res 2           ' DUMP vector
 
 
 
-long _el
-byte _sp
-pub SPINNER	CNT@ _el @ - ABS CLKHZ 10 / > IF CNT@ _el ! _sp C@ 3 AND " |/-\" + C@ EMIT 8 EMIT _sp C++ THEN ;
-: COMMA		',' EMIT ;
-
-pub .BITS ( n bits -- ) 	FOR DUP 1& . 2/ NEXT DROP ;
-pub .BYTES ( adr bytes -- )	ADO I C@ .BYTE SPACE LOOP ;
-pub U.R				<# FOR # NEXT #> PRINT$ ;
-
-{ MEASURE PIN CAPACITANCE AS A FLOAT TO HIGH TIME }
-: ?PIN ( pin --  )
-	CRLF ." P" DUP . 9 EMIT
-	PIN
-	0 8 FOR L 100 us F CNT@ BEGIN R UNTIL CNT@ SWAP - ABS + NEXT 3 >>
-	10 U.R
-	;
-: ?PINS ( from for -- ) 	ADO I ?PIN LOOP ;
-
-
---- type out printable characters or substitute with a dot
-pub .TYPE ( adr cnt -- )	ADO I C@ .EMIT LOOP ;
-
-pri EMIT:	R> uemit W! ;
-pri KEY:	R> ukey W! ;
-pre TABLE  	HERE 2+ [C] GRAB [C] CREATE: DUP ALLOT ?DUP IF ERASE THEN ;
-
-
 
 
 
@@ -389,29 +597,14 @@ pre TABLE  	HERE 2+ [C] GRAB [C] CREATE: DUP ALLOT ?DUP IF ERASE THEN ;
 
 		*** SD CARD SUPPORT ***
 
-{
-''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-'''''''''''''''''''''''''' SD CARD SUPPORT '''''''''''''''''''''''''''
-''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-
-$200 REGS
-$300..$800 FREE
-
-}
-
-
 
 org@	org ( marks start of block for DATLEN )
-
+private
 0	bytes	sdvars
 4	bytes	ocr
 16	bytes	cid
 16	bytes	csd
 	long	sdsize
-	byte	sdcmd
-	byte	wrflg
-	byte	mntd
-	byte	sdcrc
 	long	@sdrd
 	long	@sdwr
 	long	sdsum		--- checksum of sector contents
@@ -420,72 +613,97 @@ org@	org ( marks start of block for DATLEN )
 
 	long	filesect	--- starting sector of open file'
 	long	_fread
+	long	mntd		--- serial number of mounted device
 	word	_fkey
-	byte	wrens
-	byte	file#
-	byte f?
-	byte fq
-	byte cflg
-	byte sdhc
-	byte blklen
-16 	bytes bitbuf
 
+	byte	sdcmd
+	byte	wrflg		--- true if sector has been modified
+\	byte	mntd
+\	byte	sdcrc
+
+	byte	wrens		--- write enables
+	byte	file#
+	byte	fq
+\	byte	cflg
+	byte	sdhc
+	byte	blklen
+16 	bytes	bitbuf
+
+	*** PARITION RECORDS ***
+
+--- 4 primary partitions
 64	bytes	parts	--- STATE,[HEAD,[SECT(2),TYPE,HEAD],SECT(2)],1STSECT(4),PARTSEC(4)
 				---  00    82    03 00   0B   50    CA C6     $2000  $00ECC000
+	word	parsig
 
-\ ''''''''''''''''''''''''''''''
-\	FAT32
-\ ''''''''''''''''''''''''''''''
+	*** FAT32 BOOT RECORD ***
 
-3	bytes	fat32
+3	bytes	fat32		--- jump code +nop
 8	bytes	oemname		--- MSWIN4.1
-2	bytes	bytesect	--- 0200 = 512B
-1	bytes	sectclust	--- 40 = 32kB clusters
-2	bytes	rsvd		--- 34 11
-1	bytes	fats		--- 02
-15	res			--- 00 00 00  00 F8 00 00  3F 00 FF 00  00 20 00 00
+	word	b/s		--- 0200 = 512B (bytes/sector)
+	byte	s/c		--- 40 = 32kB clusters (sectors/cluster)
+	word	rsvd		--- 32 reserved sectors from boot record until first fat table
+	byte	fats		--- 02
+2	res			--- Maximum Root DirectoryEntries (non-FAT32)
+2	res			--- Number of Sectors inPartition Smaller than 32MB (non-FAT32)
+	byte	media		--- F8 hard disk  (IBM defined as 11111red, where r is removable, e is eight sectors/track, d is double sided. )
+2	res			--- Sectors Per FAT in Older FATSystems (N/A for FAT32)
+2	res			--- Sectors Per Track --- 3F 00
+2	res			--- Number of Heads --- FF 00
+	long	hidden		--- Number of Hidden Sectors before Partition --- 00 20 00 00
 ( 32 )
-	long	partsize	--- $00EC_C000  Number of sectors * byte/sect (512) = capacity'
-	long	sectfat		--- $0000_0766 Number of sectors per FAT table'
+	long	s/p		--- $00EC_C000  Number of sectors * byte/sect (512) = capacity'
+	long	s/f		--- $0000_0766 Number of sectors per FAT table'
 2	bytes	fat?		--- 0000 fat flags (b3..0 = active fat copy, b7=mirroring)
 2	res	fatver		--- 0000 fat version MAJOR.MINOR
 ( 44 )
 	long	rootcl		--- $0000_0002 Cluster Number of the Start of the Root Directory'
-2	res	infosect	--- 0001 info = Sector Number of the FileSystem Information Sector  (from part start)
-2	res	bbsect		--- 0006 boot = Sector Number of the Backup Boot Sector (from part start)
+	word	infosect	--- 0001 info = Sector Number of the FileSystem Information Sector  (from part start)
+	word	bbsect		--- 0006 boot = Sector Number of the Backup Boot Sector (from part start)
 12	res			--- 00s
 ( 64 )
-1	bytes	ldn		--- 80 logical drive number of partition
+	byte	ldn		--- 80 logical drive number of partition
 1	res	ldnh		--- 01 unused or high byte of ldn
-1	bytes	extsig		--- 29 extended sig
+	byte	extsig		--- 29 extended sig
 	long	serial		--- $63FE_C331 serial number of partition
 11	bytes	volname		--- volume name
 8	res	fatname		--- "FAT32   " always FAT32 - (don't trust)
-( 96 )
+2	res			--- align to a long for FREAD
+( 90 )
+
+--- --- --- --- --- --- --- --- --- --- --- --- --- ---
+
+	long freeclusters	--- Read from info sector
+	long lastcluster	--- Read from info sector
+---	calculated from scan at mount
+	long usedcl		--- Used Clusters
+	long freecl		--- Free Clusters
+	long used%		--- percentage used *100
 
 
 --- --- --- --- --- --- --- --- --- --- --- --- --- ---
 --- create room for some system variables in this table
 
-	long	rootdir		--- sector address of root directory
+	long	rootdir		--- sector address of root directory (MBR,GAP,BOOT,INFO,BACKUP,FAT1,FAT,ROOT)
 	long	fat1
 	long	fat2
 	long	cwdsect
-org@ sdvars -	:= sdsz
-\ orglen		:= sdsz
-cwdsect fat32 - := fatsz
+org@ sdvars -	:= sdsz		--- size of array used to hold all raw SD card related values + FAT etc
+cwdsect fat32 - := fatsz	--- size of array used to hold all fat32 related values
 
-\ ''''''''''''''''''''''''''''''
-\ 	DIRECTORY STRUCTURE'
-\ ''''''''''''''''''''''''''''''
+	byte	f?
 
+
+	*** DIRECTORY STRUCTURE ***
+private
 0	org	--- use relative offsets
 
 8	res	fnam
 3	res	fext
-1	res	fatr
-1	res			\ MUST BE 00'
-1	res	fcms
+1	res	fatr		--- 5=archive,4=subdir,3=vol-label,2=system/fixed,1=hidden,0=readonly
+1	res	00		\ MUST BE 00' user atrs
+( 13)
+1	res	fcms		\ create time 10ms
 2	res	fctime
 2	res	fcdate
 2	res	fadate
@@ -496,80 +714,125 @@ cwdsect fat32 - := fatsz
 4	res	fsize
 
 	!org --- reset org back to previous
-
+public
 $10000		:= SDBUF	--- allocate 4k for buffers
-SDBUF 512 +	:= SDBUF1
+
+--- erase 4 sector buffers
+pri !SDBUF				SDBUF $800 ERASE ;
+
+
+pri SDBUF+ ( offset -- adr )		SDBUF + ;
 
 \ pub SDBUF		$1.0000 file# C@ 5 << + ;
 \ pub FILE ( n -- )	3 AND file# C! ;
 
-pub SDSPI	&60.58.59.61 SPIPINS ;
-pub SDCS	' SDSPI 5 + C@ ;
+pri SDSPI				&60.58.59.61 SPIPINS ;
+pri SDCS				' SDSPI 5 + C@ ;
 --- set SD PINS
-pub SDPINS	' SDSPI :=! ;
+pub SDPINS				' SDSPI :=! ;
 
 pub SD? ( -- flg )
+--- assume SD CD pin may be floating --- check for pullup
 	SDCS LOW 100 WAIT SDCS FLOAT 1000 WAIT SDCS PIN@ SDCS HIGH
- 	DUP ?EXIT mntd C~
+--- clear mounted flag if SD not present
+ 	DUP ?EXIT mntd ~
 	;
-pri RELEASE	SPICE
-pri SDCLK	8 CLKS ;
-pri SDCLK3	24 CLKS ;
-pri TOKEN ( marker -- flgX ) --- clock SD for token but timeout false if not found
+
+pri RELEASE				SPICE
+pri SDCLK				8 CLKS ;
+pri SDCLK3				24 CLKS ;
+--- clock SD for token but timeout false if not found
+pri TOKEN ( marker -- flgX )
 	' SDSPI 3 + C@ HIGH
 	10000 BEGIN OVER 0 SPIRD <> WHILE 100 us 1- DUP 0= IF NIP EXIT THEN REPEAT
 	2DROP TRUE
 	;
-pri !CRC	$95 sdcrc C! ;
+\ pri !CRC				$95 sdcrc C! ;
 pub CMD ( data cmd -- res )
 	DUP sdcmd C!
+---	setup SD pins for SPI and preclock
 	SDSPI SDCLK
-	SPIWC SPIWL sdcrc C@ SPIWB !CRC
-pub SDRES
+---	write cmd and 32-bits of data
+	SPIWC SPIWL
+---	send a crc of CMD8 or CMD0 - others ignore value
+	sdcmd C@ IF $87 ELSE $95 THEN SPIWB
+pri SDRES
+---	  retry for read until <> $FF
 	0 4000 FOR SPIRD >B DUP $FF <> ?NEXT DROP
 	;
 pub ACMD ( data acmd -- res )
 	0 55 CMD DROP CMD
 	;
+pri DAT?
+	SDRES $FE =
+	;
 
-pri SDSTAT ( -- stat ) 0 13 CMD SDRES 8<< OR ;
+pri SDSTAT ( -- stat )	16 CLKS 0 13 CMD SDRES 8<< OR ;
 
-pri SD4@ ( -- long ) 0 SPIRD SPIRD SPIRD SPIRD ;
+\ pri SD4@ ( -- long ) 0 SPIRD SPIRD SPIRD SPIRD ;
 pri SDDAT! ( adr -- ) --- read info into memory
 	$FE TOKEN IF DUP 16 ADO 0 SPIRD I C! LOOP SDCLK3 THEN DROP
 	;
 
 
+--- CSD BIT FIELDS ---
+
+pri XSHR
+	0 DO
+	0 bitbuf 16
+	  ADO I C@ DUP 2/ ROT OR I C!
+	    1& IF $80 ELSE 0 THEN
+	  LOOP
+	 DROP
+ 	LOOP
+	;
+
+pri CSD@
+	csd
+pri BITS@	( bith bitl adr -- dat )
+	bitbuf 16 CMOVE
+ 	DUP XSHR - 1+ |<
+	1-
+	0 bitbuf 12 + 4 ADO 8 << I C@ OR LOOP
+	AND
+	;
+
 pri !SX
-	sdcmd C~~ !CRC 5 FOR 0 0 CMD 1 = ?NEXT 0EXIT
-	5 FOR $87 sdcrc C! $1AA 8 CMD 1 = ?NEXT 0EXIT
-	SD4@ $1AA = 0EXIT
+	sdcmd C~~ 5 FOR 0 0 CMD 1 = ?NEXT 0EXIT
+	5 FOR $1AA 8 CMD 1 = ?NEXT 0EXIT
+	0 SPIRL $1AA = 0EXIT
 	0 1000 0 DO 30 |< 41 ACMD IF 200 CLKS ELSE 1+ LEAVE THEN LOOP 0EXIT
-	0 58 CMD ?EXIT SD4@ DUP ocr ! 0EXIT
+	0 58 CMD ?EXIT 0 SPIRL DUP ocr ! 0EXIT
 	0 10 CMD 0= IF cid SDDAT! THEN
 	0 9 CMD 0= 0EXIT csd SDDAT!
 	;
 
 --- Initialise the SD card in SPI mode and return with the OCR
 --- pub !SD ( -- ocr|false )
-pub !SD
+pub !SD ( --- ocr|false )
 	SDSPI sdvars sdsz ERASE
-	SDBUF $800 ERASE
+	!SDBUF
 	@sector ~~
-	SD? IF SDCLK3 20 FOR !SX sdcmd C@ 9 = DUP 0= IF 50000 CLKS THEN ?NEXT DROP
-	ocr @ SPICE
-	800 CLKS
+	SD? IF
+	  SDCLK3 20 FOR
+	    !SX sdcmd C@ 9 = DUP 0= IF 50000 CLKS THEN
+	  ?NEXT
+	  DROP SPICE 800 CLKS
+	  69 48 CSD@ 1+ 10 <<   sdsize !
+	THEN
+	ocr @
 	;
 
 
 		--- CARD INFO ---
 
-: .LINE		CRLF 4 SPACES DUP PRINT$ LEN$
-: .LINE@	32 - ABS '.' SWAP EMITS SPACE ;
-: .TITLE	CRLF CRLF 20 OVER LEN$ 2/ - SPACES ." *** " PRINT$ ."  *** " ;
+pri .LINE	CRLF 4 SPACES DUP PRINT$ LEN$
+pri .LINE@	32 - ABS '.' SWAP EMITS SPACE ;
+pri .***	SPACES ." ***" SPACE ;
+pri .TITLE	CRLF CRLF 20 OVER LEN$ 2/ - .*** PRINT$ 1 .*** ;
 
 
-pri .MAN
+pri .MFG
 	SWITCH
 	1 CASE   ." PANASONIC" BREAK
 	2 CASE   ." TOSHIBA  " BREAK
@@ -583,161 +846,184 @@ pri .MAN
 	$74 CASE ." TRANSCEND" BREAK
 	$76 CASE ." PATRIOT  " BREAK
 	$82 CASE ." SONY     " BREAK
-	CASE@  ."  BRAND" .B
+	CASE@  ."  UNKNOWN" .B
 	;
 
-
+{
 pub .CID
 	" CID" .TITLE
-	" MANUFACTURER" .LINE cid C@ .MAN
-	" OEM ID" .LINE cid 1+ 2 .TYPE
-	" PRODUCT NAME" .LINE cid 3 + 5 .TYPE
+	" BRAND" .LINE cid C@ .MFG
+	" OEM ID" .LINE cid 1+ 2 CTYPE
+	" PRODUCT" .LINE cid 3 + 5 CTYPE
 	" REV" .LINE cid 8 + C@ .B
-	" SERIAL#" .LINE cid 9 + @ 10 U.R
-	" MANUFACTURED" .LINE cid 14 + C@ cid 13 + C@ >N 8 << + DUP 4 >>  2000 + . >N .AS" /*|"
-	" CRC" .LINE cid 15 + C@ DUP .B SPACE 1& 0= IF CRLF ." BAD CID " THEN
-	;
+	" SERIAL#" .LINE cid 9 + @ PRINT
+	" MFG" .LINE cid 14 + C@ cid 13 + C@ >N 8 << + DUP 4 >>  2000 + . >N .AS" /*|"
+	" CRC" .LINE cid 15 + C@ DUP .B SPACE 1& ?EXIT
+}
 
-pub .CIDL
-	." CARD: " cid C@ .MAN
-	SPACE cid 1+ 2 .TYPE
-	SPACE cid 3 + 5 .TYPE
+pub .CID
+	."  CARD: " cid C@ .MFG
+	SPACE cid 1+ 2 CTYPE
+	SPACE cid 3 + 5 CTYPE
 	."  REV" cid 8 + C@ .B
-	."  #" cid 9 + @ 10 U.R
+	."  #" cid 9 + @ U.
 	."  DATE:" cid 14 + C@ cid 13 + C@ >N 8 << + DUP 4 >>  2000 + . >N .AS" /*|"
-	cid 15 + C@ 1& 0= IF CRLF ." BAD CID " THEN
+	CRLF cid 15 + C@ 1& ?EXIT
+	." BAD CID "
 	;
 
-pri XSHR
-	0 DO
-	0 bitbuf 16
-	  ADO I C@ DUP 2/ ROT OR I C!
-	    1& IF $80 ELSE 0 THEN
-	  LOOP
-	 DROP
- 	LOOP
-	;
-pri CSD@
-	csd
-pri BITS@	( bith bitl adr -- dat )
-	bitbuf 16 CMOVE
- 	DUP XSHR - 1+ |<
-	1-
-	0 bitbuf 12 + 4 ADO 8 << I C@ OR LOOP
-	AND
-	;
 
-pre ,,	[C] GRAB 3 FOR 8<< + NEXT [C] , ;
+\ pri 10^		FOR 10 * NEXT  ;
+
+
 
 \ 0=0.5 mA, 1=1 mA, 2=5 mA, 3=10 mA, 4=25 mA, 5=35 mA, 6=60 mA, 7=100mA
 \ 0=1 mA, 1=5 mA, 2=10 mA, 3=25 mA, 4=35 mA, 5=45 mA, 6=80 mA, 7=200
 
-
+private
 0 TABLE ma
-	000 001 005 010 ,,
-	025 035 060 100 ,,
-	001 005 010 025 ,,
-	035 045 080 200 ,,
+--- min
+	&010.005.001.000 ,
+	&100.060.035.025 ,
+--- max
+	&025.010.005.001 ,
+	&200.080.045.035 ,
 
 
 \ Card information
-: .ma		ma + + C@ .DECL ." ma" ;
-: 10^		FOR 10 * NEXT  ;
-: .xs ( ns -- )
-	DUP 1 M => IF 1 M / .AS" #~#ms" EXIT THEN
-	DUP 1,000 => IF 1,000 / .AS" #~#us" EXIT THEN
-	.AS" #~#ns"
-	;
-pub .CURRENT
+pri .ma		ma + + C@ ?DUP IF .DECL ELSE ." 0.5" THEN ." ma" ;
+pri .CURRENT
+	  " Iread Vmin" .LINE	61 59 CSD@ 0 .ma
+	  " Iread Vmax" .LINE	58 56 CSD@ 8 .ma
+ 	  " Iwrite Vmin" .LINE	55 53 CSD@ 0 .ma
+	  " Iwrite Vmax" .LINE	52 50 CSD@ 8 .ma
+{
 	  " Read Current @VDD min" .LINE	61 59 CSD@ 0 .ma
 	  " Read Current @VDD max" .LINE	58 56 CSD@ 8 .ma
  	  " Write Current @VDD min" .LINE	55 53 CSD@ 0 .ma
 	  " Write Current @VDD max" .LINE	52 50 CSD@ 8 .ma
+}
 	  ;
+}
 
+pri .xs ( ns -- )
+	DUP 1 M => IF 1 M / .AS" #~#ms" EXIT THEN
+	DUP 1,000 => IF 1,000 / .AS" #~#us" EXIT THEN
+	.AS" #~#ns"
+	;
+
+private
 0 TABLE tval
-	00 10 12 13 ,,
-  	15 20 25 30 ,,
-	35 40 45 50 ,,
- 	55 60 70 80 ,,
+	&13.12.10.00 ,
+	&30.25.20.15 ,
+	&50.45.40.35 ,
+	&80.70.60.55 ,
 
 pri TACC ( -- ns )
 	119 112 CSD@ --- b6..3=tval b2..0=tru
 	DUP 3 >> tval + C@ ( *10)
-	SWAP 7 AND 1 SWAP 1+ 10^ 100 / *
+	SWAP 7 AND 1 SWAP 1+ FOR 10 * NEXT 100 / *
 	;
-pub .TACC
-	" TACC LATENCY" .LINE
+pri .TACC
+	" LATENCY" .LINE
  	TACC .xs
-	119 112 CSD@ ?DUP IF 100 * .AS" +*|# clocks " THEN
+	119 112 CSD@ ?DUP 0EXIT 100 * .AS" +*|# clocks "
 	;
 
-pub .TRANS
-	" TRANSFER SPEED" .LINE
+pri .TRANS
+	" SPEED" .LINE
 	103 96 CSD@ .AS" ##Mbps "
 	;
 pub .CSD
 	sdhc C~
-	" CSD REGISTER" .TITLE
+	" CSD" .TITLE
 	127 126 CSD@
-	IF " CARD TYPE" .LINE ." SDHC" sdhc C~~
-
-	.TACC  .TRANS
-	" CLASSES" .LINE 95 84 CSD@ 20 << REV 12 .BITS
- 	" BLKLEN" .LINE		83 80 CSD@ DUP blklen C! |< .DECL
+	IF
+	  " CARD TYPE" .LINE ." SDHC" sdhc C~~
+	  .TACC  .TRANS
+	  " CLASSES" .LINE 95 84 CSD@ 20 << REV 12 .BITS
+ 	  " BLKLEN" .LINE		83 80 CSD@ DUP blklen C! |< .DECL
 ---	                                    total sectors
-	" SIZE" .LINE  69 48 CSD@ 1+ 10 <<   DUP sdsize ! 2000 U/ .DECL ." MB"
-	.CURRENT
-	ELSE ." NOT AN SDHC CARD !"
+	  " SIZE" .LINE  sdsize @ 2000 U/ .DECL ." MB"
+
+	  .CURRENT
+
+	  EXIT
 	THEN
+	."  NOT SDHC!"
 	;
 
 pub .OCR
-	" OCR REGISTER" .TITLE
-	" OCR VALUE" .LINE ocr @ .L ( $C0FF_8000 )
+	" OCR" .TITLE
+	" VALUE" .LINE ocr @ .L ( $C0FF_8000 )
 	ocr @ 30 >> 3 <> IF ."  invalid!" THEN
-	" VOLTAGE RANGE" .LINE
-	27 ocr @ 15 >> $1FF AND BEGIN DUP 1& 0= WHILE 2/ SWAP 1+ SWAP REPEAT OVER .AS" #.#V to "
-	BEGIN DUP 1& WHILE 2/ SWAP 1+ SWAP REPEAT DROP .AS" #.#V"
+	" RANGE" .LINE
+	27 ocr @ 15 >> $1FF AND BEGIN DUP 1& 0= WHILE 2/ b++ REPEAT OVER .AS" #.#V to "
+	BEGIN DUP 1& WHILE 2/ b++ REPEAT DROP .AS" #.#V"
 	;
 
 
 
 
+--- Read only - write protected
+pub RO		0
+pri wm		wrens C! ;
+--- Read/Write access - write enabled
+pub RW		1 wm ;
+--- Read/Write & create
+pub RWC		3 wm ;
+\ --- Create directory
+\ pub +D		7 wm ;
+--- Read/Write/System permission
+pub RWS		7 wm ;
+pri W?		1 wrens SET? ;
 
+pri B>S ( bytes -- sectors )	L>S SWAP IF 1+ THEN ;
 
 
 		*** SD CARD MEMORY ACCESS ***
 
-pub SDWR ( src sect -- flg  )
-	wrens C@ --- write protected?
+pri SDWR?	@sdwr @ ;
+
+pub SDWR ( src sect --  )
+	@sdwr ~
+---	never sector 0 or if write protected unless RWS used
+	DUP 0<>	 W? AND 4 wrens SET? OR
 	IF
-	SDCLK3
-	24 CMD 0=
+---	 sector write command
+	 SDCLK3  24 CMD
+	  IF DROP
 ---		    start token, data
-	  IF SDCLK3 $FE SPIWB 512 SPITX
+	  ELSE SDCLK3 $FE SPIWB 512 SPITX
+---	    read data response
 	    0 TOKEN $FF TOKEN AND
-	  ELSE
-	  DROP FALSE
 	  THEN
-	  DUP @sdwr ! RELEASE EXIT
+---	 always reset any RWS permissions after op
+	  4 wrens CLR   @sdwr ! RELEASE
+	BREAK
 ---	else write protect fail
-	THEN
-	2DROP FALSE
+	2DROP
 	;
 
-pub SDWRS ( ram sector bytes -- flg )
-	wrens C@
+( 372ms @120MHz for 64KB SU04G )
+
+pub SDWRS ( ram sector bytes -- )
+	@sdwr ~ W?
 	IF
-	512 ALIGN 9>> ADO DUP I SDWR 0= IF LEAVE DROP FALSE ELSE 512 + THEN LOOP
-	RELEASE EXIT
-	THEN 3DROP FALSE
+	  B>S
+	  ADO
+	    DUP I SDWR 512 + SDWR? 0= IF LEAVE THEN
+	  LOOP
+	  DROP RELEASE
+	BREAK
+	3DROP
 	;
 
+--- only flush sector if it has been written to
 pub ?FLUSH
 	wrflg C@ 0EXIT
 pub FLUSH
-	SDBUF @sector @ SDWR DROP wrflg C~
+	SDBUF @sector @ SDWR wrflg C~
 	;
 
 pri SDRDBK ( dst -- crc/flg )
@@ -750,36 +1036,39 @@ pub SDRD ( sector dst --  ) --- read sector into memory and update sector number
 pub SDRDX ( sector dst -- ) --- read sector into memory silently
 	SDCLK
 	SWAP 17 CMD DUP 0=
-	IF DROP SDRES $FE =
-	  IF SDRDBK ELSE SDCLK SDCLK SDSTAT 2DROP 0 THEN
+	IF DROP DAT?
+	  IF SDRDBK ELSE SDSTAT 2DROP 0 THEN
 	THEN
+---	save crc as a flag  -- only lower 16-bits of seccrc = crc with flag in b31
 	DUP @sdrd ! seccrc !
 	RELEASE
 	;
 
 
 pri SDWAIT --- wait for data token with timeout (only used in SDRDS)
-	1000 BEGIN 1- SDRES $FE = OVER 0= OR UNTIL DROP
+	1000 BEGIN 1- DAT? OVER 0= OR UNTIL DROP
 	;
 
 --- read multiple sectors in continuous multiblock mode
 pub SDRDS ( sector dst bytes -- crc | false )
 ---	convert bytes to sectors '
-	512 ALIGN  9>>
+	B>S
 ---	multiblock read   --  command not accepted '
 	-ROT SWAP 18 CMD
 	IF 2DROP FALSE
 	ELSE
 ---	process read token and read block if available '
-	  SDRES $FE =
-	  IF SWAP FOR DUP SDRDBK DROP SDWAIT 512 + NEXT DROP
-	  ELSE 2DROP 16 CLKS SDSTAT DROP SPICE FALSE
+	  DAT?
+	  IF
+	    SWAP FOR DUP SDRDBK DROP SDWAIT 512 + NEXT DROP
+	  ELSE
+	    2DROP SDSTAT DROP SPICE FALSE
 	  THEN
 	THEN
 	RELEASE	\ SDCLK SPICE
 	DUP @sdrd !
 ---	cancel multiblock read on error
-	2000 BEGIN 1- 0 12 CMD 0= OVER 0= OR UNTIL DROP
+	  2000 BEGIN 1- 0 12 CMD 0= OVER 0= OR UNTIL DROP
 	RELEASE
 	;
 {
@@ -788,93 +1077,570 @@ pub SDRDS ( sector dst bytes -- crc | false )
 0001_01F0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 55 AA     '..............U.' ok
 }
 
-pub SECTORF
+pub SECTORF ( sect -- sdbuf )
 	?FLUSH SDBUF SDRD
 	SDBUF
 	;
 
+--- S>M
 pub SECTOR ( sect -- sdbuf )
-	DUP @sector @ <> IF SECTORF ELSE DROP SDBUF THEN
+	DUP @sector @ <> IF SECTORF EXIT THEN
+	DROP SDBUF
 	;
 
 
-pub @FILE ( -- sector )		filesect @ ;
+--- at current FILE
+pub @FILE ( -- sector )			filesect @ ;
 
-
-pub SDADR!
-	wrflg C~~
+pub SDADR!				wrflg C~~
 pub SDADR ( sdadr -- ramadr )		L>S @FILE + SECTOR + ;
 pub SD@ ( xaddr -- long )		SDADR @ ;
-pub SD! ( data xaddr -- )		SDADR ! ;
-pub SDC@				SDADR C@ ;
+pub SD! ( data xaddr -- )		SDADR! ! ;
+pub SDC@ ( sdaddr -- byte )		SDADR C@ ;
 pub SDC!				SDADR! C! ;
 pub SDW@				SDADR W@ ;
+--- select SD for DUMP method
 pub SD					DUMP: SDC@ SDW@ SD@ ;
 
-\ pre [+]		@CODES 2- W@ $3FF AND @CODES 4 - W+! -2 @CODES W+! ;
+--- at ROOT sector
+pub @ROOT ( -- sector )			rootdir @ ;
+--- at BOOT sector
+pub @BOOT ( -- sector )			parts 8 + @ ;
+pri @FAT ( fat# -- sector )		s/f @ * @BOOT rsvd W@ + + ;
 
-pub @ROOT				rootdir @ ;
-pub @BOOT				parts 8 + @ ;
-pub @FAT ( fat# -- sector )		sectfat @ * @BOOT rsvd W@ + + ;
+pri FATSZ ( -- fatsz )			sdsize @ @BOOT - ;
+
+--- open ROOT sector as a file
 pub ROOT				@ROOT
+pub OPEN-SECTOR
 pri FOPENS!				_fread ~ filesect ! ;
-
-pub CWD! ( sect str -- )		cwdsect ! ;
-
-pub CLUST>SECT ( clust# -- sector )	rootcl @ -
-pri CL>SECT2				sectclust C@ * @BOOT + ;
+--- Close file by flushing, switching to read-only and use sector 0
+pub CLOSE-FILE
+pub FCLOSE				FLUSH RO 0 OPEN-SECTOR ;
 
 
+--- change current working directory
+pub CD# ( sect -- )			cwdsect ! ;
 
 
-pub RDFAT
+		*** CLUSTERS ***
+{
+
+...............MEDIA
+0001_0000: 0FFF_FFF8 0FFF_FFFF 0FFF_FFF8 0000_0004     '................'
+0001_0010: 0000_0005 0000_0006 0000_0007 0000_0008     '................'
+0001_0020: 0000_0009 0000_000A 0000_000B 0000_000C     '................'
+0001_0030: 0000_000D 0000_000E 0000_000F 0000_0010     '................'
+0001_0040: 0000_0011 0000_0012 0000_0013 0000_0014     '................'
+0001_0050: 0000_0015 0000_0016 0000_0017 0000_0018     '................'
+0001_0060: 0000_0019 0000_001A 0000_001B 0000_001C     '................'
+0001_0070: 0000_001D 0000_001E 0000_001F 0000_0020     '............ ...'
+0001_0080: 0000_0021 0000_0022 0FFF_FFFF 0000_0000     '!..."...........'
+0001_0090: 0000_0000 0000_0000 0000_0000 0000_0000     '................'
+
+  1:   _BOOT_P2.BIN 20 $0000_5B26   2018-12-24 06:48   X...P2D2F   ....   131,072  ok
+TAQOZ# @ROOT .L --- $0000_5B1E ok
+TAQOZ# s/c C@ . --- 8 ok
+
+
+CLUSTER0 = MEDIA BYTE
+CLUSTER1 = b27 = clean ; b26 = no errors
+
+}
+
+pub FAT1				fat1 @ OPEN-SECTOR ;
+pub FAT2				fat2 @ OPEN-SECTOR ;
+
+
+{ CLUSTER CHAIN CODES
+If value => $0FFF.FFF8 then there are no more clusters in this chain.
+$0FFF.FFF7 = bad
+0 = free
+
+}
+pri @CLUSTER ( index -- xadr )		FAT1 4* ;
+
+pri CLUSTER@ ( index -- cluster )	@CLUSTER SD@ ;
+
+
+pri FreeClusters? ( size -- #clusters clust1 )
+	--- calculate clusters required
+     B>S s/c C@ U/ ( clusters )
+      0
+     BEGIN
+       --- find a free cluster
+       BEGIN DUP CLUSTER@ WHILE 1+ REPEAT
+       --- check for sufficient contiguous clusters ( clusters index )
+       0 OVER 3RD ADO I @CLUSTER SD@ OR DUP IF NIP I SWAP LEAVE THEN LOOP
+       ( clusters chain flag )
+     WHILE
+       1+
+     REPEAT
+     ;
+
+
+
+--- count number of clusters used from start cluster
+pub #C ( cluster# -- clusters )
+---	backup current sector
+	filesect @ >R
+--- scan through fat1 as a file
+	FAT1
+	0 SWAP BEGIN b++ 4* SD@ DUP $0FFF_FFF8 => UNTIL DROP
+---	restore sector
+	R> OPEN-SECTOR
+	;
+
+pub I>D ( dirIndex -- diradr )
+	ROOT 5 << SDADR
+	;
+
+
+--- Directory address to first cluster
+pub D>C ( diradr -- cluster#0 )
+---	cluster low and cluster high
+	fcl OVER+ W@ SWAP fch + W@ W>L
+	;
+
+--- Directory address to starting sector
+pub D>S ( diradr -- sector )
+	D>C
+--- Cluster to sector
+pub C>S ( clust# -- sector )
+	rootcl @ -
+pri C>S2
+	s/c C@ * @ROOT +
+	;
+
+--- convert a sector to a cluster ( result 0 = out of range  ; 2 = 1st )
+pub S>C ( sector -- cluster )
+\	@BOOT - s/c C@ U/
+	@ROOT - s/c C@ U/ 2+
+	;
+
+--- convert sector to total allocated clusters
+pri S>C# ( sector -- clusters )
+	S>C #C s/c C@ * 9<<
+	;
+
+pub I>S ( dirIndex -- sector )
+	I>D D>S
+	;
+
+--- find the directory entry that matches the file sector ( 2.3us @120MHZ for entry #30)
+pub S>D ( sector -- diradr )
+	0 BEGIN DUP I>D C@ WHILE DUP I>D D>S 3RD = IF NIP I>D EXIT THEN 1+ REPEAT
+	2DROP 0
+	;
+
+pub @FSIZE ( -- adr )
+	@FILE S>D 28 +
+	;
+
+
+pri ?USED
+---	Calculate used/unused
+	0 0 usedcl 12 ERASE
+	sdsize @ @ROOT - ( data-sectors )
+	s/c C@ U/ ( data-clusters ) 2+ ( where root is cluster 2 )
+	2 DO I CLUSTER@ IF b++ ELSE 1+ THEN LOOP
+	2DUP + 3RD 10000 * SWAP U/
+	used% ! freecl ! usedcl !
+	;
+
+pub GETFAT
+---	read fat32 as a byte array
 	@BOOT SECTORF fat32 90 CMOVE
-	rsvd W@ sectfat @ fats C@ *
-	rootcl @ 2- CL>SECT2 + +
-	rootdir !
+---	sectors rsvd to fat1  ... size of fat tables
+	rsvd W@                s/f @ fats C@ *  + ( offset from fat boot )
+\	rootcl @ 2- C>S2
+	hidden @ + 	rootdir !
 ---	'' save time by precalculating FAT table addresses
 	0 @FAT fat1 ! 1 @FAT fat2 !
+	?USED
+---	Open info sector
+	@BOOT infosect W@ + OPEN-SECTOR
+	$1E8 SD@ freeclusters !
+	$1EC SD@ lastcluster !
 	;
 
-pub RO	0
-pri wm	wrens C! ;
-pub RW	1 wm ;
+{
+00h 	First Signature (52h 52h 61h41h) 	1 Double Word
+04h 	Unknown, Currently (Mightjust be Null) 	480 Bytes
+1E4h 	Signature of FSInfo Sector(72h 72h 41h 61h) 	1 Double Word
+1E8h 	Number of Free Clusters (Setto -1 if Unknown) 	1 Double Word
+1ECh 	Cluster Number of Clusterthat was Most Recently Allocated. 	1 Double Word
+1F0h 	Reserved 	12 Bytes
+1FCh 	Unknown or Null 	2 Bytes
+1FEh 	Boot Record Signature (55hAAh) 	2 Bytes
+}
+
+{
+
+	--- Read and buffer the FAT32 boot record
+	@BOOT SECTOR fat32 90 CMOVE
+	--- make a fast multiply using a shift left constant
+	sect/clust C@ >| clshift C!
+
+	rsvd W@ sect/fat @ fats C@ *
+	rootcl @ 2- clshift C@ << + + @BOOT + rootdir !
+	--- save time by precalculating FAT table addresses
+	0 @FAT fat1 !  1 @FAT fat2 !
+}
 
 
----	REPORTING 	===
+pub MOUNT
+	SD? 0EXIT !SD 0EXIT
+	0 SECTORF $1FE + W@ $AA55 <> " INVALID PARTITION" ?ERROR
+	$1BE SDBUF+ parts 66 CMOVE
+	fat32 fatsz ERASE
+	RO --- disable sector sdwr
+	GETFAT
+	ROOT serial @ mntd !
+--- PRINT CID AS CONFIRMATION
+	.CID
+	;
+---	MOUNT FAT32 if not already mounted
+pub ?MOUNT
+	SD? serial @ mntd @ = AND mntd @ 0<> AND 0=
+	  IF 10 ms MOUNT ( $0D KEY! ) ELSE SD? 0= IF mntd ~ THEN THEN
+	;
+pri MOUNTED?
+	?MOUNT mntd @
+	;
+{
+--- Open the starting sector as a file
+pub FOPENS ( sect -- )
+	?MOUNT OPEN-SECTOR
+	;
+}
 
-pub .SPD
+		*** DIRECTORY ***
+
+pri @FNAME ( -- hubadr )
+	0
+pri @DIR ( offset -- hubadr ) --- return with the indexed directory plus offset in hub RAM
+	I 5 << + ROOT SDADR
+	;
+
+pub .NAME
+	@FNAME 8 CTYPE
+	8 @DIR C@ $20 <> IF '.' EMIT 8 @DIR 3 CTYPE EXIT THEN
+	SPACE
+pri GAP	3 SPACES
+	;
+
+pub .DECX ( num ch -- )		EMIT .AS" ##" ;
+pub .DATE
+	fdate @DIR DUP W@ DUP 9>> 1980 + .DEC4
+	5 >> >N '-' .DECX $1F AND '-' .DECX
+	ftime @DIR W@ DUP 11 >> $20 .DECX
+	5 >> $3F AND ':' .DECX
+	;
+
+{ DIRECTORY STRUCTURE
+8	res	fnam
+3	res	fext
+1	res	fatr		--- 5=archive,4=subdir,3=vol-label,2=system/fixed,1=hidden,0=readonly
+1	res	00		\ MUST BE 00' user atrs
+( 13)
+1	res	fcms		\ create time 10ms
+2	res	fctime
+2	res	fcdate
+2	res	fadate
+2	bytes	fch		--- no actual bytes in memory - just the label
+2	bytes	ftime
+2	bytes	fdate
+2	bytes	fcl
+4	res	fsize
+}
+
+--- Print dir entry rg+1=mode
+pri .ENTRY
+	8 f? SET? IF CRLF I .AS" ##\#: " THEN
+	.NAME SPACE 8 f? SET? ( ls or dir ? )
+	IF
+	  11 @DIR C@ DUP .BYTE SPACE 8 AND 0=
+	  IF
+---	 $0000_9678   2018-12-24 02:56
+	  @FNAME D>S .L GAP .DATE
+---	 display file size
+	  SPACE 28 @DIR @ DUP 14 U.R
+\	  100,000,000 U< DUP 1& . 0EXIT
+	  27 >> ?EXIT
+	  ."  /" @FNAME D>S S>C# 14 U.R
+---	 display file header
+	    GAP @FNAME D>S 512 SDBUF+ SDRDX
+	    512 SDBUF+ 20 ADO I C@ .EMIT LOOP
+	    EXIT
+	  THEN
+	THEN
+	fq C++ fq C@ 7 AND ?EXIT CRLF
+	;
+{
+0123456789*123456789*123456789*123456789*123456789*123456789*123456789*123456789*123456789*123456789*123456789*
+    FILENAME.EXT ATR  SECTOR     DATE       TIME         FILE SIZE      ALLOCATED  CONTENTS
+ 1: _BOOT_P2.BIN 20 $0000_5B18   2018-12-24 06:48        131,072 /       131,072   X...P2D2F   ........
+}
+pub DIR
+	8
+pri .DIR
+	f? W! MOUNTED? 0EXIT
+---	scan root directory from start sector for max dir entries of 1 cluster? (index)
+	0 s/c C@ 4 <<
+	ADO
+---	  Look for a valid dir entry and print it '
+	  @FNAME C@ $20 $7E WITHIN IF .ENTRY THEN
+	LOOP SPACE
+	;
+
+pub DIRW
+pub ls
+	CRLF 0 .DIR
+	;
+
+
+
+--- Load text input from a sector
+pub FLOADS ( sector -- ) --- load file as console input then restore on null to console input '
+	OPEN-SECTOR ukey W@ _fkey W!
+	KEY:
+pub FGET ( -- ch ) --- Read the next byte from the file
+	_fread @ SDC@ ?DUP
+	IF
+	_fread ++ EXIT
+	THEN
+	_fkey W@ ukey W! _fkey W~
+	FALSE
+	;
+
+--- Read file offset to memory
+pub FREAD ( sdsrc hubdst bytes -- )
+	4 ALIGN ADO DUP SD@ I ! 4+ 4 +LOOP DROP
+	;
+--- Write memory to file offset
+pub FWRITE ( hubsrc sddst bytes -- )
+	4 ALIGN ADO DUP @ I SD! 4+ 4 +LOOP DROP
+	;
+
+
+private --- 8.3 directory entry structure
+0 bytes dirbuf
+8 bytes -fname
+3 bytes -ext
+1 bytes -atr		---  (0:read-only, 1:hidden, 2:system, 3:volume label, 4:directory, 5:archive, 6-7: undefined)
+1 res 0
+1 bytes -fcms
+2 bytes -fctime
+2 bytes -fcdate
+2 bytes -fadate
+2 bytes -fclsth
+2 bytes -ftime
+2 bytes -fdate
+2 bytes -fclstl
+4 bytes -fsize
+
+
+16 bytes file$
+pri GETF$
+	GET$
+pub >F83 ( str -- buf )
+	DUP file$ $!
+	dirbuf $20 ERASE
+	-fname 12 $20 FILL
+---	str buf
+	-fname OVER LEN$ 0 DO
+	  OVER I+ C@ DUP 'a' 'z' WITHIN IF $20 - THEN
+	  DUP '.' = IF 2DROP -ext ELSE OVER C! 1+ THEN
+	LOOP
+	2DROP -fname
+	;
+{
+--- compare file name at dirptr with fname
+pub FNAME= ( dirptr -- flg )
+	fname 11 C$=
+	;
+}
+pub FOPEN# ( index -- )
+	I>D D>S OPEN-SECTOR
+	;
+
+--- find current f83 name and return with file offset to directory entry
+
+pri FFIND ( -- sdrel )
+	0 BEGIN DUP I>D DUP C@ WHILE -fname 11 C$= IF I>D EXIT THEN 1+ REPEAT
+	2DROP 0
+	;
+
+{
+pri +DIR ( index -- index+1 hubadr )
+	1+ DUP I>D
+	;
+--- find current f83 name and return with file offset to directory entry
+pri FFIND ( -- sdrel )
+	0 BEGIN DUP I>D FNAME= NOT WHILE DUP I>D C@ 0= IF DROP 0 EXIT THEN 1+ REPEAT
+	I>D
+	;
+
+}
+
+
+
+
+pri FreeDir? ( --- faddr )
+	ROOT 0 BEGIN DUP SDC@ WHILE 32 + REPEAT
+	;
+
+
+---
+pri ClaimClusters ( for from -- from )
+     FAT1 \ RW
+     DUP 3RD ADO 1 I+ I @CLUSTER SD! LOOP					--- link clusters
+     ( #clusters clust1 )
+     SWAP OVER+ 1- $0FFFFFFF SWAP @CLUSTER SD!					--- mark end cluster
+     FLUSH
+     ;
+
+
+--- Create a new file by name but if it already exists then delete the old one and reuse the dir entry.
+--- if size = 0 then max = 4GB
+
+pre mk  [G] GET$
+pub mk$ ( size namestr --  )
+	dirbuf $20 ERASE
+	--- as 8.3 and write the name of the file to the directory buffer
+	>F83 dirbuf 11 CMOVE
+	--- set archive attribute
+	$20 -atr C!
+	--- stamp create date and time
+\	DATE@ @CDATE FDATE! TIME@ @CTIME FTIME!
+	--- Set size of file to maximum & preallocate clusters
+		DUP -fsize ! FreeClusters? ClaimClusters
+	--- write first cluster
+	ROOT L>W -fclsth W! -fclstl W!
+\	FSTAMP
+	--- add directory record to directory
+	FreeDir? DUP ( xadr ) SDADR ( bufptr )
+	--- write directory entry
+	dirbuf SWAP 32 CMOVE FLUSH
+
+\	<OPEN FILE>
+     ;
+
+
+{
+
+64 KB MAKE OPEN-FILE <name>
+
+
+}
+--- size used to create a file if file not found - 0 = none
+long mksiz
+
+--- Force file open  - create to size of it not found
+pub MAKE ( size -- )	mksiz ! RWC ;
+
+
+
+pre OPEN-FILE
+--- File Open using name in stream - use @FILE to return file sector handle which is 0 is not open
+pre FOPEN ( <name> -- )
+	[G] GET$
+pub OPEN-FILE$
+pub FOPEN$ ( str -- )
+	>F83 DROP
+pub REOPEN-FILE
+	FFIND ?DUP
+	IF D>S
+	ELSE
+	  2 wrens SET? IF mksiz @ file$ mk$ D>S  ELSE 0 THEN
+	THEN
+	OPEN-SECTOR
+	;
+
+
+pre DEL-FILE ( <name> -- )
+	OPEN-FILE
+	;
+
+
+
+{
+
+
+
+
+
+
+
+
+
+
+}
+--- ---
+pre FLOAD ( <name> -- )
+	[C] FOPEN @FILE FLOADS
+	;
+
+pre RENAME# ( dir# <new> -- )
+	[G] GETF$ ROOT SWAP 5 << SDADR
+pri RENAME!
+	11 CMOVE FLUSH
+	;
+
+pre RENAME ( <old> <new> -- )
+	GETF$ DROP FFIND DUP
+	  IF GETF$ SWAP RENAME! BREAK
+	.SUCCESS
+	;
+
+pre cat
+	[C] FOPEN 0 SD PRINT$
+	;
+
+pre QV
+	[C] FOPEN 0 SDADR $80 DUMP
+	;
+
+
+
+
+
+
+
+
+
+
+
+
+
+		*** DISK REPORTING ***
+
+
+pri .SPD ( sector -- )
 	CNT@ 8 FOR OVER SDBUF SDRD NEXT
-	CNT@ SWAP - ABS 3 >> CLKHZ 1000000 / / .AS" *|#us" DROP
+	CNT@ SWAP - ABS 3 >> CLKHZ 1M / / .AS" *|#us" DROP
 	;
-
 pub .SPEEDS
-	" SECTOR READ SPEEDS" .LINE $80.0000 0 DO I .SPD COMMA $10.0000 +LOOP
+	" SPEEDS" .TITLE
+---				  Up to 4GB print sector speed in 0.5GB increments
+	" SECTOR" .LINE $80.0000 0 DO I .SPD ',' EMIT $10.0000 +LOOP
 ---	Read a 256k block into unused memory
-	" BLOCK READ RATE" .LINE 0 $8.0000 $4.0000 LAP SDRDS DROP LAP
-	CLKHZ $4.0000 1000 / LAP@ */ .DECL ." kB/second @" .CLK
+	" BLOCKS" .LINE 0 $8.0000 $4.0000 LAP SDRDS DROP LAP
+---	Report the equivalent multi-block read speed
+	CLKHZ $4.0000 1000 / LAP@ */ .DECL ." kB/s @" .CLK
 	;
 
-\ pub .CARD	' SDSPI 2+ @ DUP >B .AS" SCLK:## " 8>> DUP >B .AS" MOSI:## " 8>> DUP >B .AS" MISO:## " 8>> .AS" CS:## " ;
-pub .CARD	' SDSPI 2+ @ DUP 24 >> >B .AS" CS:## " DUP 16>> >B .AS" SO:## " DUP 8>> >B .AS" SI:## " >B .AS" CK:## " ;
+\ pub .CARD	' SDSPI 2+ @ DUP 24 >> >B .AS" CS:## " DUP 16>> >B .AS" SO:## " DUP 8>> >B .AS" SI:## " >B .AS" CK:## " ;
 
 pub .SD
-	.CARD	.CID .OCR .CSD CRLF .SPEEDS
+	.CID .OCR .CSD .SPEEDS
 	;
 
-pub .MAP ( from for size -- )
-	2 REG C!
-	0 REG W~
-	ADO
-	0 REG W@ 64 // 0= IF CRLF I .L SPACE THEN 0 REG W++
-	0 I 2 REG C@ ADO I SDBUF SDRD seccrc W@ OR LOOP
-	IF '*' ELSE '.' THEN EMIT
-	2 REG C@ +LOOP
-	;
+		*** PARTITIONS ***
 
-
-
-pri ?FS ( n -- flg )
+--- Check file system type and return with known name
+pri ?FS ( n -- str/flg )
 	SWITCH
 	11 CASE " FAT32 CHS" BREAK
 	12 CASE " FAT32 LBA" BREAK
@@ -883,1143 +1649,359 @@ pri ?FS ( n -- flg )
 	FALSE
 	;
 
-
-pub .CHS ( cccshhxx -- )
-	8>>
-	DUP 16 >> OVER 14 >> 3 AND 8 << + . COMMA
-	DUP >B . COMMA
-	8>> $3F AND .
+--- Print Cylinder Head Sector
+pri .CHS ( xxcccshh -- )
+	24 BITS
+	DUP 16 >> OVER 14 >> 3 AND 8 << + PRINT ',' EMIT
+	DUP >B PRINT ',' EMIT
+	8>> $3F AND PRINT
 	;
+
+
+
 {
-pub .PARTS
-	0 SECTOR $1BE +
-	4 0 DO DUP @
-	  IF CRLF I .AS" PART#|# "
-	    DUP C@ IF ." ACTIVE " ELSE ." INACTIVE " THEN
-	    ."  - START "	DUP @ .CHS
-	    ."  - END " DUP 4+ @ .CHS
-	    ."  - FIRST SECTOR " DUP 8 + @ .L
-	    ."  - SECTORS " DUP 12 + @ DUP .DECL
-	    ."  = " 512 1000000 */ .DECL ." MB"
-	  THEN
-	  16 +
-	LOOP
-	DROP
-	;
+Disk /dev/sdb: 7948 MB, 7948206080 bytes
+255 heads, 63 sectors/track, 966 cylinders, total 15523840 sectors
+Units = sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disk identifier: 0x000edc02
+
+    CHS START....................... 1023,254,63
+    CHS END......................... 1023,254,63
+
+HHHHHHHH,CCSSSSSS,CCCCCCCC
+
+
 }
-pub @PART ( part# -- adr )	4 << 0 SECTOR $1BE + + ;
+pub !MBR
+	!SDBUF
+---	copy boot config table for reference in unused area at start
+	0 SDBUF $100 CMOVE
+---	MBR NAME OF FORMAT TOOL
+\	" TAQOZ V2" 3 SDBUF+ $!
+--- 1023, 254, 63
+	parts 66 ERASE
+---	valid partition flags
+	$AA55 parsig W!
 
+\	$80 parts C!
+---	fs+CHS
+	$0CFFFFFE parts 1+ !
+--- This sets up 4MB hiddenbefore parition according to SD compliance (But >32GB 16MB)
+	sdsize @ 70,000,000 U> IF $8000 ELSE $2000 THEN  parts 8 + !
+---	TOTAL SECTORS = SDSIZE-<hidden>
+	FATSZ parts 12 + !
+---	copy parts to buffer
+	parts $1BE SDBUF+ 66 CMOVE
+---	Write MBR
+	RWS SDBUF 0 SDWR
+	;
 
-pub .PARTS
-	" PARTITION TABLES" .TITLE
-	4 0 DO I @PART DUP 4+ C@
+--- Fetch sectors, print, and display in MB as well (  15,515,648 = 7,944MB )
+
+pri .MBS ( adr -- )
+	@ DUP .DECL ."  = "
+pub .MB ( sectors -- )
+	512 1,000 */
+	DUP 1,000 U<
+	IF .DECL ." kB"
+	ELSE 1,000 U/ .DECL ." MB"
+	THEN
+	;
+
+pub .MBR
+	" MBR" .TITLE
+---	Scan all 4 antries : check active partition type
+	4 0 DO I 4 << parts + DUP 4+ C@
 	  IF
-	    " PARTITION" .LINE I . SPACE  DUP C@ IF ." ACTIVE " ELSE ." INACTIVE " THEN
-	    " FILE SYSTEM" .LINE DUP 4+ C@ ?FS ?DUP IF PRINT$ ELSE ." NOT FORMATTED " THEN
-	    " CHS START" .LINE DUP @ .CHS
+	    " PARTITION" .LINE I PRINT SPACE DUP C@ DUP .BYTE SPACE 0= IF ." IN" THEN ." ACTIVE"
+	    " FILE SYSTEM" .LINE DUP 4+ C@ ?FS ?DUP IF PRINT$ ELSE ." UNFORMATTED " THEN
+	    " CHS START" .LINE 1+ DUP @ .CHS
 	    " CHS END" .LINE 4+ DUP @ .CHS
-	    " FIRST SECTOR" .LINE 4+ DUP @ .L
-	    " TOTAL SECTORS" .LINE 4+ @ DUP .DECL
-	    ."  = " 512 1000000 */ .DECL ." MB"
+	    " FIRST SECTOR" .LINE 3 + DUP @ .L
+	    " TOTAL SECTORS" .LINE 4+ .MBS
+	    CRLF
 	  ELSE DROP
 	  THEN
 	LOOP
+	0 OPEN-SECTOR $170 16 SD DUMPL
 	;
 
 
+{
+MS FORMULA
+RootDirSectors = ((BPB_RootEntCnt * 32) + (BPB_BytsPerSec – 1)) / BPB_BytsPerSec;
+TmpVal1 = DskSize – (BPB_ResvdSecCnt + RootDirSectors);
+TmpVal2 = (256 * BPB_SecPerClus) + BPB_NumFATs;
+TmpVal2 = TmpVal2 / 2;
+FATSz = (TMPVal1 + (TmpVal2 – 1)) / TmpVal2;
+    BPB_FATSz16 = 0;
+    BPB_FATSz32 = FATSz;
+}
+
+--- assign cluster size for format ---  limit 512..64k    power of 2 scaled
+pri CLSZ ( bytes -- )
+	DUP 0= IF DROP FATSZ 10 >> THEN
+	512 MAX 64KB MIN >| |< 9>>  >!
+pri #s/c
+	64
+	;
+
+{
+000_2001 SECTOR
+0001_0000: 52 52 61 41  00 00 00 00  00 00 00 00  00 00 00 00     'RRaA............'
+
+0001_01E0: 00 00 00 00  72 72 41 61  1D BA 0E 00  02 00 00 00     '....rrAa........'
+0001_01F0: 00 00 00 00  00 00 00 00  00 00 00 00  00 00 55 AA     '..............U.'
+
+Offset 	Description 	Size
+00h 	First Signature (52h 52h 61h41h) 	1 Double Word
+04h 	Unknown, Currently (Mightjust be Null) 	480 Bytes
+1E4h 	Signature of FSInfo Sector(72h 72h 41h 61h) 	1 Double Word
+1E8h 	Number of Free Clusters (Setto -1 if Unknown) 	1 Double Word
+1ECh 	Cluster Number of Clusterthat was Most Recently Allocated. 	1 Double Word
+1F0h 	Reserved 	12 Bytes
+1FCh 	Unknown or Null 	2 Bytes
+1FEh 	Boot Record Signature (55hAAh) 	2 Bytes
+}
+pri !FSINFO
+	!SDBUF
+	" RRaA" SDBUF $!
+	" rrAa" $1E4 SDBUF+ $!
+	-1 $1E8 SDBUF+ !
+	2 $1EC SDBUF+ !
+	$AA55 $1FE SDBUF+ W!
+---	update file information sector
+	SDBUF @BOOT 1+ SDWR
+	;
+
+pri !FATX
+	!SDBUF
+	$0FFF_FFF8 DUP 0 SDBUF+ ! 8 SDBUF+ !
+	$0FFF_FFFF 4 SDBUF+ !
+	RW s/f @ ADO SDBUF I SDWR !SDBUF SPINNER LOOP
+	;
+
+pub !FATS
+	fat1 @ !FATX
+	fat2 @ !FATX
+	;
+
+pub !FAT
+	fat32 fatsz ERASE
+---	jump code (redundant?)
+	$905BEB fat32 !
+---	name of formatting system
+	" TAQOZ P2" oemname $!
+	512 b/s W!
+	#s/c 0= IF 0 CLSZ THEN #s/c s/c C!
+---	RESERVED ???
+\	#s/c 8 + rsvd W!	( should this be set to a constant 32? )
+	32 rsvd W!
+	2 fats C!
+	$F8 media C!
+	@BOOT hidden !
+
+---	sectors/track
+\	#s/c media 3 + W!
+	$3F media 3 + W!
+---	number of heads
+\	#s/c 2* media 5 + W!
+	$FF media 5 + W!
+---	sectors/partition = sectors/sd - hidden
+	FATSZ DUP s/p !
+
+---	calculate sectors/fat +  fudge
+
+	sdsize @ @BOOT - #s/c >| 7 + >> ( #s/c 2/ +  )    s/f !
+\	#s/c >| 7 + >>          #s/c 2/ +     s/f !
+	0 fat? !		--- clear fat flags and fatver (4 bytes)
+	2 rootcl !
+	1 rootcl 4+ W!		--- partition info sector
+	6 bbsect W!		--- backup boot sector
+	128 ldn W!		--- logical drive#
+	$29 extsig C!
+	RND serial !
+---	 Volumne name FAT name
+	" P2 CARD    FAT32   " volname 19 CMOVE
+---
+	@BOOT rsvd W@ + DUP fat1 !  s/f @ + fat2 !
+---	update buffer with our copy of FAT
+	!SDBUF fat32 SDBUF 96 CMOVE
+	$AA55 $1FE SDBUF+ W!
+---	write FAT32 boot sector
+	SDBUF @BOOT SDWR
+---	write backup boot sector
+	SDBUF @BOOT 6 + SDWR
+---	then info sector
+	!FSINFO
+---	and init and zero all the FAT entries (takes a while)
+	!FATS
+	;
+
+pri .res	" res" .LINE  ;
+pri .PS		SWAP .LINE rootcl + W@ DUP .W ."  = " @BOOT + .L ;
+
+{
+	byte	fats		--- 02
+2	res	Maximum Root DirectoryEntries (non-FAT32)
+2	res	Number of Sectors inPartition Smaller than 32MB (non-FAT32)
+	byte	media		--- F8 hard disk
+2	res	Sectors Per FAT in Older FATSystems (N/A for FAT32)
+2	res	Sectors Per Track --- 3F 00
+2	res	Number of Heads	--- FF 00
+	long	hidden	Number of Hidden Sectors inPartition --- 00 20 00 00
+}
 
 
 pub .FAT --- print FAT32 BOOT RECORD
-\	CRLF
-	parts 4 + C@ ?FS
-	IF
-	" FAT32 INFORMATION" .TITLE
-	" OEM NAME" .LINE oemname 8 .TYPE
-	" bytes/sector" .LINE bytesect W@ DUP .
-	" sectors/cluster" .LINE sectclust C@ DUP . ."  = " * 10 >> .AS" *|kB clusters"
-	" reserved" .LINE sectclust 1+ 2 .BYTES
-	" Number of FATs" .LINE fats C@ .
-	" reserved" .LINE fats 1+ 15 .BYTES
-	" Sectors in partition" .LINE partsize @ DUP .DECL ."  = " 512 1000000 */ .DECL ." MB"
-	" Sectors/FAT" .LINE sectfat @ .DECL
-	" FAT FLAGS"  .LINE 8 fat? SET? IF ." Mirroring to" THEN fat? C@ >N .
-	" FAT32 VERSION" .LINE fat? 2+ 2 .BYTES
-	" ROOT CLUSTER" .LINE rootcl @ .L ."  SECTOR: " rootdir @ .L
-	" FILE INFO SECTOR" .LINE rootcl 4+ W@ .W
-	" BACKUP BOOT SECTOR"  .LINE rootcl 6 + W@ .W
-	" reserved"  .LINE rootcl 8 + 12 .BYTES
-	" Logical Drive#"  .LINE ldn W@ .
-	" Extended signature" .LINE extsig C@ DUP .B $29 = IF ."  good" ELSE ."  bad" THEN
-	" Partition Serial#" .LINE serial @ DUP .L SPACE U.
-	" Volume Name" .LINE volname 11 .TYPE
-	" FAT name"  .LINE volname 11 + 8 .TYPE
-	ELSE  TRUE " FORMAT" ?ERROR
-	THEN
-	;
-
-pub .DISK	.SD  .PARTS .FAT ;
-
----	MOUNT FAT32 if not already mounted
-pub ?MOUNT
-	SD? 0EXIT mntd C@ ?EXIT
-pub MOUNT
-	!SD 0= " NO CARD" ?ERROR
-	0 SECTORF $1FE + W@ $AA55 <> " INVALID PARTITION" ?ERROR
-	RO --- disable sector sdwr
-
-	fat32 fatsz ERASE
-	SDBUF $1BE + parts 64 CMOVE
-	RDFAT
-	ROOT mntd C~~
-	.CIDL
-	;
-
-pub FOPENS ( sect -- )		?MOUNT FOPENS! ;
-
---- Lookup starting sector from dir entry
-pub FSECT ( diradr -- sector )
----	cluster low and cluster high
-	fcl OVER+ W@ SWAP fch + W@ W>L
-pub C>S --- convert cluster to to starting sector
- 	rootcl @ - sectclust C@ * @ROOT +
-	;
-
-
-{
-' RDDIR - read root dir entries and process as name/sector/size into fast access buffer
-RDROOT	word	ATROOT
-	word	DUP,SECTOR,w+16,ADO,I
-	word	ATROOT,ROOTBUF,_WORD,$800,SDRDS,DROP
-}
-'' DIR '
-'' FORMAT: 21: BIRD    .BMP $0002_89A8   2018.12.24.14.21   BMz.......z...l.   308,346
-
-
-
-\ pri .@DIR			CRLF I .AS" ##\#:" SPACE ;
-
-pri @DIRNAME
-	0
-pri @DIR ( offset --- hubadr ) --- return with the indexed directory plus offset in hub RAM
-	I 5 << + ROOT SDADR
-	;
-
-pub .NAME
-	@DIRNAME 8 .TYPE
-	8 @DIR C@ $20 <> IF '.' EMIT 8 @DIR 3 .TYPE EXIT THEN
-	SPACE
-pri 3S	3 SPACES
-	;
-\ pub .HDR	@DIRNAME FSECT FOPENS1 0 SDADR 16 ADO I C@ .EMIT LOOP ;
-\ pub .SIZE	28 @DIR @ .DECL ;
-
-pub .DECX ( num ch -- ) EMIT 2 U.R ;
-pub .DATE
-	fdate @DIR DUP W@ DUP 9>> 1980 + .DEC4
-	5 >> >N '-' .DECX $1F AND '-' .DECX
-	SPACE
-	ftime @DIR W@ DUP 11 >> 2 U.R
-	5 >> $3F AND ':' .DECX
-	;
-
-
---- Print dir entry rg+1=mode
-pri .ENT
-	8 f? SET? IF CRLF I .AS" ##\#:" 3S THEN
-	.NAME SPACE 8 f? SET? ( ls or dir ? )
-	IF
-	  @DIRNAME FSECT .L 3S .DATE
-	 3S @DIRNAME FSECT SDBUF1 SDRDX SDBUF1 16 ADO I C@ .EMIT LOOP
-	  3S 28 @DIR @ .DECL EXIT
-	THEN
-	fq C++ fq C@ 7 AND ?EXIT CRLF
+	parts 4 + C@ ?FS 0= " FORMAT" ?ERROR
+	  " FAT32" .TITLE
+	  " OEM" .LINE oemname 8 CTYPE
+	  " Byte/Sect" .LINE b/s W@ DUP PRINT
+	  " Sect/Clust" .LINE s/c C@ DUP PRINT ."  = " * .KB
+\	  .res s/c 1+ 2 .BYTES
+	  " FATs" .LINE fats C@ PRINT
+\	  .res fats 1+ 4 .BYTES
+	  " Media" .LINE media C@ .BYTE
+\	  .res media 1+ 2 .BYTES
+	  " Sect/Track" .LINE media 3 + W@ .W
+	  " Heads" .LINE media 5 + W@ .W
+	  " Hidden Sectors" .LINE hidden .MBS
+	  " Sect/Part" .LINE s/p .MBS
+	  " Sect/FAT" .LINE s/f .MBS
+	  " Flags"  .LINE 8 fat? SET? IF ." Mirroring to" THEN fat? C@ >N PRINT
+	  " Ver" .LINE fat? 2+ 2 .BYTES
+	  " ROOT Cluster" .LINE rootcl @ .L ."  SECTOR: " rootdir @ .L
+	  " INFO Sector"  4 .PS
+	  " Backup Sector"  6 .PS
+	  .res rootcl 8 + 12 .BYTES
+	  " Drive#"  .LINE ldn C@ PRINT --- Should be 0 or 128
+	  " Ext sig" .LINE extsig C@ DUP .B $29 = .OK
+	  " Part Serial#" .LINE serial @ DUP .L ."  #" U.
+	  " Volume Name" .LINE volname 19 CTYPE
+	\  " FAT Name" .LINE  volname 11 + 8 CTYPE
 	;
 {
-: .X >L 3S @DIRNAME FSECT FOPENS! 0 SDADR 16 ADO I C@ .EMIT LOOP L> DROP ;
-
-
+                  *** FAT32 ***
+    OEM............................. mkfs.fat
+    Byte/Sect....................... 512
+    Sect/Clust...................... 8 = 4kB
+    FATs............................ 2
+    MEDIA........................... F8
+    Sect/Track...................... $003E
+    Heads........................... $007A
+    Hidden Sectors.................. 8192
+    Sect/Part....................... 7,736,320 = 3,960MB
+    Sect/FAT........................ 7,544
+    FLAGS........................... 0
+    VERSION......................... 00 00
+    ROOT Cluster.................... $0000_0002 SECTOR: $0000_5B10
+    INFO Sector..................... $0001 = $0000_2001
+    BACKUP Sector................... $0006 = $0000_2006
+    res............................. 00 00 00 00 00 00 00 00 00 00 00 00
+    Drive#.......................... 384
+    Ext sig......................... $29 OK!
+    Part Serial#.................... $7806_E39C 2013717404
+    Volume Name..................... TEST
+    FAT Name........................ FAT32    ok
+TAQOZ#
 }
 
-pub DIR
-	8
-pri .DIR
-	DUP f? W!
-	IF
-	?MOUNT \ CRLF .FAT
----	scan root directory from start sector for max dir entries (index)
-	THEN
-	0 sectclust C@ 4 << ADO
----	Look for a valid dir entry and print it '
-	@DIRNAME C@ $20 $7E WITHIN IF .ENT THEN
-	LOOP SPACE
-	;
-
-pub ls	CRLF ?MOUNT 0 .DIR ;
-
-
-
-
-
-pub FLOAD ( sector -- ) --- load file as console input then restore on null to console input '
-	FOPENS ukey W@ _fkey W!
-	KEY:
-pub FGET ( -- ch ) --- Read the next byte from the file
-	_fread @ SDC@ ?DUP
-	IF
-\	  DUP $0A = IF DROP $0D THEN
-	_fread ++ EXIT
-	THEN
-	_fkey W@ ukey W! _fkey W~
-	FALSE
-	;
-
-pub FREAD ( sdsrc hubdst bytes -- )
-	4 ALIGN ADO I OVER+ SD@ I ! 4 +LOOP DROP
-	;
-pub FWRITE ( hubsrc sddst bytes -- )
-	4 ALIGN ADO I OVER+ @ I SD! 4 +LOOP DROP
+pub .USED
+	" USED" .LINE usedcl @ s/c C@ * .MB  ."  of " freecl @ s/c C@ * .MB ."  = "
+pub .USED%
+	used% @ .AS" ##~#.##% "
 	;
 
 
-{
-' RENAME THE CURRENTLY OPEN FILE'
-RENAME
-: FNAME		GETWORD
-FNAME	word	GETWORD
+pub .DISK	.SD  .MBR .FAT .USED ;
 
-To print a file:
-$1B780 FOPEN 0 SD PRINT$
-
-}
-
-
-\ : DIROPEN	@ROOT FOPENS ;
-
---- FSECT ( diradr -- sector )
---- @FILE ( -- sector )
-
-{ dir structure
-fnam		res	8
-fext		res	3
-fatr		res	1
-		res	1	' MUST BE 00'
-fcms		res	1
-fctime		res	2
-fcdate		res	2
-fadate		res	2
-fclsth		res	2
-ftime		res	2
-fdate		res	2
-fclstl		res	2
-fsize		res	4
-}
-0 bytes dirbuf
-8 bytes fname
-3 bytes ext
-1 bytes atr
-4 res
-
-
-pub >F83 ( str -- buf )
-	fname 12 $20 FILL  fname 11 + C~
----	str buf
-	fname OVER LEN$ 0 DO
-	  OVER I+ C@ DUP 'a' 'z' WITHIN IF $20 - THEN
-	  DUP '.' = IF 2DROP ext ELSE OVER C! 1+ THEN
-	LOOP
-	2DROP fname
-	;
-
-pub COMPARE ( adr1 adr2 cnt -- flg )	cflg C~~ ADO DUP C@ I C@ <> IF cflg C~ LEAVE THEN 1+ LOOP DROP cflg C@ 0<> ;
-
---- compare file name at dirptr with fname
-pub FNAME= ( dirptr -- flg )	fname 11 COMPARE ;
-
---- find current f83 name and return with file offset to directory entry
-pri FINDSD ( -- sdrel )
-	ROOT
-	0 BEGIN DUP SDADR FNAME= NOT WHILE DUP SDADR C@ 0= IF DROP 0 EXIT THEN 32 + REPEAT
-	SDADR
-	;
-
-pub FOPEN# ( index -- )	ROOT 5 << SDADR FSECT FOPENS ;
-
-pre FOPEN
-	GET$
-pub FOPEN$ ( str -- )
-	>F83 DROP FINDSD ?DUP IF FSECT ELSE 0 THEN FOPENS
-	;
-
-
-
-pri FLOAD1	FLOAD ;
-pre FLOAD ( <name> -- )		[C] FOPEN @FILE FLOAD1 ;
-
-pub GETFNAME	GET$ >F83 ;
-
-
-pre RENAME# ( dir# <new> -- )
-	[C] GRAB GETFNAME ROOT SWAP 5 << SDADR 11 CMOVE FLUSH
-	;
-
-pre RENAME ( <old> <new> -- )
-	GETFNAME DROP FINDSD ?DUP IF GETFNAME SWAP 11 CMOVE FLUSH ELSE ."  NOT FOUND " THEN
-	;
-
-pre cat		[C] FOPEN 0 SD PRINT$ ;
-
-pre QV		[C] FOPEN 0 SDADR $80 DUMP ;
-
-
-
-
-pub FS! ( type part# -- )
-	@PART 4+ C! RW FLUSH
-	;
-
-{
-	0  1  2  3  4  5   6  7  8  9   A  B  C  D   E  F
-	            TY           FIRST SECTOR TOTAL SECTORS
-	00 82 03 00 0B 50  CA C6 00 20  00 00 00 C0  EC 00 00 00
-
-
-}
-
---- dummy setup for 8GB card - adapt as needed
-pub !PARTS
-	0 SECTOR $200 ERASE
-	$0B 0 @PART 4+ C!
-	$2000 0 @PART 8 + !
-	$ECC000 0 @PART 12 + !
-	$AA55 SDBUF $1FE + W!
-	RW SDBUF 0 SDWR DROP
-	;
-pub !MBR
-	;
-pub !FAT
-	;
+--- erase root directory cluster
 pub !ROOT
-	;
-pub FORMAT
-	;
-
-
-pub .SECT ( sector -- )		SECTOR sdsum @ IF $200 DUMP ELSE ." EMPTY" THEN ;
-
-pub .ACTIVE ( sector sectors -- )
-	ADO I SECTOR DROP sdsum @ IF CRLF I .L SPACE sdsum @ .L THEN LOOP
+	!SDBUF RW
+---	populate with a single volume entry
+	" ROOTDIR    " SDBUF $! 8 11 SDBUF+ C!
+	@ROOT s/c C@ ADO SDBUF I SDWR !SDBUF LOOP
 	;
 
-pri .SUCCESS	IF ." SUCCESS!" ELSE ." FAILED!" THEN ;
 
-pub BIX		" _BOOT_P2.BIX" ;
+pub FORMAT \ ( cluster-size -- )
+\	DEPTH IF 0 MAX 64KB MIN ELSE 0 THEN
+	!SD
+	IF
+	  !MBR
+\	  DUP 0= IF DROP FATSZ 10 >> THEN CLSZ
+	  !FAT
+	  GETFAT
+ 	  !ROOT
+	  MOUNT .DISK
+ 	ELSE
+	  ."  FAILED!"
+	THEN
+	0 CLSZ
+	;
+
+
+
+
+{
+RAW BOOT SECTOR INFO
+MBR:
+$17C	= "ProP"
+$174	= SECTOR
+$178	= BYTES
+
+RW " ProP"  @ $17C SD! 1 $174 SD! 65536 $178 SD! FLUSH
+
+}
+
+pri BIX		" _BOOT_P2.BIX" ;
 
 pre BACKUP ( backup to filename or FLASH )
 	GET$
-pub BACKUP$
-	SPACE
+pub BACKUP$ ( " MBR" BACKUP$ )
+	DUP UPPER$
+\	SPACE NFA' END 8 + $1.0000 OVER - ERASE
 	DUP " FLASH" $=
-	  IF DROP SFJID 1+ IF SFBACKUP THEN SFJID 1+ .SUCCESS EXIT THEN
-	DUP " BIX" $= IF DROP BIX THEN
-	FOPEN$  @FILE
-	IF 0 @FILE $2.0000 RW SDWRS RO .SUCCESS
-	ELSE  ." NOT FOUND "
-	THEN
-	;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-		*** VIDEO ***
-
-{
-bmpint		= $00
-bmppal		= $100
-bmppic		= $500
-}
-
-$3.0000 	:= BMP
-BMP 		:= INT
-INT 1+		:= INTON
-BMP 6 +		:= VCNT
-BMP $100 + 	:= PALETTE		--- palette in RAM $xxRRGGBB
-PALETTE $400 +	:= SCR
-640 		:= cols
-480 		:= rows
-cols rows *	:= SCRSZ
-SCRSZ $400 +	:= BMPSZ
-0		:= lm
-cols 1-		:= rm
-
-
-
-: BRIGHTER ( n -- )	INT C+! ;
-: FADE			BEGIN INT C@ WHILE -1 BRIGHTER 1 ms REPEAT ;
-
-: SYNCH			1
-: FRAMES ( cnt -- )	VCNT W@ + >W BEGIN DUP VCNT W@ = UNTIL DROP ;
-
-: HIDE			0 INT C! ;
-: SHOW			SYNCH INTON C@ INT C! ;
-
-word _x
-word _x1
-word _y
-word _y1
-word width
-word height
-long scr'
-
-: X@			_x W@ ;
-: Y@			_y W@ ;
-: x			DUP _x W! _x1 W! ;
-: y			DUP _y W! _y1 W! ;
-: w			width W! ;
-: h			height W! ;
-
-: @XY			y x ;
-
-: XY!			_y1 W! _x1 W! ;
-: XY@!			X@ Y@ XY! ;
-: !XY			_x1 W@ _x W! _y1 W@ _y W! ;
-: X+!			_x W+! X@ cols => IF _x W~ _y W++ THEN  ;
-: Y+!			_y W+! Y@ rows => IF _y W~ THEN ;
-
-: CENTER		cols 2/ rows 2/ @XY ;
-: TL			0 0 @XY ;
-: TR			cols 1- 0 @XY ;
-: BL			0 rows 1- @XY ;
-: BR			cols 1- 0 @XY ;
-
-byte _paper
-byte _pen
-byte _paper1
-byte _pen1
-
-: PEN			_pen C! ;
-: PAPER			_paper C! ;
-: PEN@			_pen C@ ;
-: PAPER@		_paper W@ ;
-: >PEN			PEN@ _pen1 C! PEN ;
-: PEN>			_pen1 C@ PEN ;
-
---- write color to pixel at XY - do not change XY - update scr' pointer
-pub PIXEL! ( pen -- )	X@ Y@
-pub PLOT ( pen x y -- )	cols W* + SCR + DUP scr' ! C! ;
-
-: COLORS		PALETTE 1024 ;
-
-0	:= black
-$E0	:= red
-$1C	:= green
-$F8	:= yellow
-$03	:= blue
-$1F	:= cyan
-$E3	:= magenta
-$FF	:= white
-$25	:= coal
-$49	:= gray
-$65	:= brown
-
-
-: PLAIN			white PEN black PAPER ;
-: REVERSE		PEN@ PAPER@ PEN PAPER ;
-
-
-
-: RGB> ( rgb -- r g b )		DUP 16>> >B OVER 8>> >B ROT >B ;
-: >RGB ( r g b -- rgb )		ROT 8<< ROT + 8<< + ;
-
-
-: !PALETTE	256 0 DO I 5 >> 7 AND 36 W*    I 2 >> 7 AND 36 W* I 3 AND 84 W* >RGB I 4* PALETTE + ! LOOP ;
-
-( themes )
-: MAC			!PALETTE black PEN white PAPER ;
-: -TERM			!PALETTE green PEN 4 paper ;
-: -C64			!PALETTE white pen blue paper ;
-
-: -BEST
-	0 0 256 0 DO I 4* PALETTE + @ RGB> + + 2DUP < IF -ROT 2DROP I SWAP ELSE DROP THEN LOOP DROP PEN
-	0 $FFFFFF 256 0 DO I 4* PALETTE + @ RGB> + + 2DUP > IF -ROT 2DROP I SWAP ELSE DROP THEN LOOP DROP PAPER
-	;
-
-word X2
-word Y2
-word Y+-
-word X+-
-
---- simple line draw in 1st octant - continue to draw a line to these coordinates
-: LINETO ( x2 y2 -- )
-	Y2 W! X2 W!
-	1 Y2 W@ Y@ < IF NEGATE THEN Y+- W!
-	1 X2 W@ X@ < IF NEGATE THEN X+- W!
-	Y2 W@ Y@ - ( dy )
-	X2 W@ X@ - ( dy dx )
-	OVER 2* OVER - ( dy dx d )
-	BEGIN
-	  X@ X2 W@ <=
-	WHILE
-	  PEN@ PIXEL!
-	  X+- W@ X+!
-	  DUP 0< IF 3RD 2* + ELSE 3RD 3RD - 2* + Y+- W@ Y+! THEN
-	REPEAT
-	3DROP
-	;
-
-: HLINE ( -- )	width W@ PEN@ PIXEL! scr' @ DUP 1+ ROT CMOVE ; \ X+! ;
-
-: VLINE ( -- )	height W@ FOR PEN@ PIXEL! 1 Y+! NEXT !XY ;
-
-
-: RECT ( color -- )  		HLINE VLINE width W@ X+! HLINE !XY height W@ Y+! VLINE !XY ;
-
-: PANEL ( color -- ) 		>PEN height W@ FOR _x1 W@ _x W! HLINE 1 Y+! NEXT PEN> ;
-
-{
-: PANEL ( width height color -- ) 	>PEN FOR _x1 W@ _x W! DUP HLINE 1 Y+! NEXT DROP PEN> ;
-
-40 X 40 Y 200 W 100 H RED PANEL
-
-}
-
-: BUTTON ( width height -- )
-	2DUP RECT !XY 1 X+! 1 Y+! XY@! 2DUP 2- SWAP 2- SWAP RECT
-	!XY 3 X+! 3 Y+! XY@! 8 - SWAP 8 - SWAP PANEL
-	;
-\ 100 100 @XY 100 50 BUTTON
-
-\ : FRAMED ( width height -- )	$FF PEN 2DUP PANEL $20 PEN !XY 10 _x1 W+! 10 _y W+! 20 - SWAP 20 - SWAP PANEL ;
-
-: DEMO		80 1 DO I 2* DUP x y i 4* DUP w h I 3 W*  PANEL 4 +LOOP ;
-
-: HVFLIP	SCR DUP SCRSZ + 1- SCRSZ 2/
-: XFLIP		FOR OVER C@ OVER C@ 4TH C! OVER C! 1- SWAP 1+ SWAP NEXT 2DROP ;
-: HFLIP		rows 0 DO I cols W* SCR + DUP cols 1- + cols 2/ XFLIP LOOP ;
-
-$1.F000		:= BUFFER
-
-: V
-: VFLIP
-	HIDE
-	SCR DUP rows 1- cols W* +
-	BEGIN
-	  DUP BUFFER cols 4/ LMOVE 2DUP cols 4/ LMOVE BUFFER 3RD cols 4/ LMOVE
-	  cols - SWAP cols + SWAP
-	  2DUP >
-	UNTIL
-	2DROP
-	SHOW
-	;
-
-
-: CS
-: CLRSCR	PAPER@
-: VFILL 	SCR SCRSZ ROT FILL !PALETTE 0 lm :=! ;
-
-{ display palette colors
-: XX 	CLRSCR SCR SCRSZ ROT FILL ;
-CLRSCR 512 0 DO I 0 @XY I 2/ PEN 10 VLINE LOOP
-CLRSCR 256 0 DO 0 I @XY I PEN 640 HLINE LOOP
-CLRSCR 256 0 DO I >N 40 * I 4 >> 30 * @XY I PEN 40 30 PANEL LOOP
-}
-
-(		BMP VIEWER		)
-
-{
-00000: 4D42 B47A 0004 0000  0000 047A 0000 006C     'BMz.......z...l.'
-00010: 0000 0280 0000 01E0  0000 0001 0008 0000     '................'
-00020: 0000 B000 0004 0B13  0000 0B13 0000 0100     '................'
-00030: 0000 0100 0000 4742  7352 0000 0000 0000     '......BGRs......'
-00040: 0000 0000 0000 0000  0000 0000 0000 0000     '................'
-00050: 0000 0000 0000 0000  0000 0000 0000 0000     '................'
-00060: 0000 0000 0000 0000  0000 0002 0000 0000     '................'
-00070: 0000 0000 0000 0000  0000 0C0C 000C 5028     '..............(P' ok
-
-BMP FILE FORMAT
-0		BM	SIGNATURE
-2		$04B47A	FILE SIZE	(308,346)
-6		$0000	RES1
-8		$0000	RES2
-$0A		$047A	PIXELARRAY OFFSET
-
-$0E		DIB HEADER
-
-$12		HORZ RES
-$16		VERT RES
-$1C		8
-}
-
-
-14 bytes V$
-
-pub $+ ( str1 str2 -- str1 )	OVER DUP LEN$ + OVER LEN$ 1+ CMOVE ;
-
-pub VIEWSEC ( sector -- )
----	read file header and align file palette to memory palette then read all
-	?DUP IF
-	  CLRSCR DUP FOPENS
-	  PALETTE 10 SDW@ $400 - - BMPSZ 511 + HIDE SDRDS
-	  $32 SDW@ IF 256 $32 SDW@ - ?DUP IF 4* PALETTE OVER + PALETTE ROT 1024 SWAP - CMOVE THEN THEN
-	  SHOW
-	  THEN
-	;
-pre VIEW ( <name> --- )
-	GET$
-pub VIEW$ ( str -- )
-	DUP UPPER$ V$ $!
-	V$ " .BMP" $+ FOPEN$ @FILE ?DUP IF VIEWSEC VFLIP ( @FILE ."  AT " .L ) THEN
-	;
-
-(		SOME DEMO WORDS 	)
-
-pub SLIDESHOW ( frames -- )
-	1 MAX 600 MIN
-	BEGIN
-	0
-	  BEGIN
-	    ROOT DUP SDC@ KEY 0= AND
-	  WHILE
-	    DUP 8 + SD@ 24 BITS " BMP" @ = IF DUP SDADR FSECT VIEWSEC VFLIP OVER FRAMES THEN
-	    32 +
-	  REPEAT
-	  DROP
-	  KEY
-	UNTIL DROP
-	;
-
-
-100 INTON C! SHOW	--- show VGA
-
-: PALMASK ( mask -- )		COLORS ADO I @ OVER AND I ! 4 +LOOP DROP ;
-
-: SHADOWS ( val -- )		COLORS ADO I @ RGB> 3 FOR 4TH OVER > IF DROP 0 THEN ROT NEXT >RGB I ! 4 +LOOP DROP ;
-
-: N
-: NEGATIVE			COLORS ADO I @ NOT I ! 4 +LOOP ;
-
-byte gam*
-byte gam/
-byte _th
-
---- simple gamma routine
-: GAMMA ( gamma* gamma/ thresh< -- )
-	_th C! gam/ C! gam* C!
-	PALETTE $400 ADO
-	  I @ RGB> ( split into components )
-	  3 FOR DUP _th C@ < IF gam* C@ gam/ C@ */ THEN ROT NEXT
-	  >RGB I ! ( recombine rgb and update )
-	4 +LOOP DROP
-	;
-
-
-: SUBS	( old new -- )		COLORS ADO OVER I @ = IF I ! LEAVE THEN 4 +LOOP DROP ;
-
-
-
-
-
-
-
-
-
-
-
-
-(		VGA BITMAP TEXT		)
-
-128 7 * TABLE FONT5X7
-
-
-10 	:= lsp	--- line space constant'
-6	:= csp	--- character space constant
-
---- User commands to change line and character spacing
-: LSP ( n -- )	' lsp :=! ;
-: CSP ( n -- )	' csp :=! ;
-
-long col
-long col1
-long row
-long row1
-byte vflg	--- 0= noscroll
-byte _scrolls
-
-'' bytes/line of text
-: b/l ( -- bytes )	cols lsp W* ;
-
-
---- setup _scr to point to screen at current row and column
-pri @RC 			col @ row @ cols W* + SCR + scr' ! ;
-\ pri @FONT ( ascii -- chadr ) 	>B $20 - 7 * FONT5X7 + ;
-
-
-pub VXY    ( x y -- )	row ! col ! ;
-pub VXY>		col1 @ row1 @ VXY ;
-pub >VXY		col @ col1 ! row1 @ row1 ! ;
-
-pub BOTTOM		0 rows lsp - VXY ;
-
---- Set how many rows the terminal will use where 0 = all
-pub NS			0
-pub TERM ( lines -- )	rows lsp / MIN _scrolls C! 0 rows lsp - VXY csp 1- ' lm :=! ;
-
-pri VHOME		0 TERM 0 0 VXY 480 lsp / _scrolls C! ;
-
-
-pri SCROLL
-	_scrolls C@ IF SCR SCRSZ + b/l _scrolls C@ W* - DUP b/l + SWAP b/l _scrolls C@ 1- W* 4/ LMOVE THEN
-	SCR SCRSZ + b/l - b/l PAPER@ FILL
-	lsp NEGATE row +!
-	;
-
-pri NEWLINE
-    lm col !
-    lsp row +!
-    row @ lsp 1- + rows => IF SCROLL THEN
-    ;
-
-
-
---- Display the VGA character and update position etc
---- draw a 5X7 font character
-pub VCH ( char -- ) --- 8.750us @300MHZ
-	7 W* FONT5X7 +
-	col @ rm => IF NEWLINE THEN
-	col @ row @ cols W* + SCR +
-	PAPER@
-	WRCH ( font' screen' pen.paper  -- )
-	csp col +!
-	;
-
-
-: BELL 	NOP ;
-
---- make the VGA display the current output device
-pub VGA
-    EMIT:
-pub VEMIT ( ch -- )
-    DUP 32 <
-    IF
-    SWITCH
-      $00 CASE BREAK
-      $01 CASE VHOME BREAK
-      $07 CASE BELL BREAK
-      $08 CASE col @ lm <> IF csp NEGATE col +! THEN BREAK
-      $09 CASE  BEGIN 32 VCH col @ csp / 7 AND 0= UNTIL BREAK
-      $0A CASE NEWLINE BREAK
-      $0C CASE CLRSCR VHOME BREAK
-      $0D CASE lm col ! BREAK
-\      $1B CASE 2 vflg SET BREAK                    --- ESC will accept next byte as data
- \     $10 $17 CASES SWITCH@ HUE BREAK        --- codes $10..$17 select a color
-\     $18 CASE $80 vflg CLR BREAK                --- wrap
-\     $19 CASE $80 vflg SET BREAK                --- no word wrap
-\    1 vflg CLR
-\      CASE@ REVERSE -2 row W+! .BYTE 2 row W+! REVERSE EXIT
-	CASE@ ( unknown control - display as character )
-    THEN
-    VCH
-    ;
-
-
-( temporary font generator )
-
-pub CH
-\	$20 -
-	7 W* FONT5X7 + SWAP ( adr str ) 1+
-	7 FOR
-	 0 OVER 5 ADO 2* I C@ 1& OR LOOP ( adr str val )
-	 REV 27 >>
-	 3RD C! ( adr str ) 5 + SWAP 1+ SWAP
-	NEXT
-	2DROP
-	;
-
---- 7 bytes of 5 bit rows ---
-
-
-"  01010101010101010101010101010101010" $1F CH
-"  00000000000000000000000000000000000" $20 CH
-"  00100001000010000100001000000000100" $21 CH
-"  01010010100101000000000000000000000" $22 CH
-"  01010010101111101010111110101001010" $23 CH
-"  00100011111010001110001011111000100" $24 CH
-"  11000110010001000100010001001100011" $25 CH
-"  01100100101010001000101011001001101" $26 CH
-"  01100001000100000000000000000000000" $27 CH
-"  00010001000100001000010000010000010" $28 CH
-"  01000001000001000010000100010001000" $29 CH
-"  00000001001010101110101010010000000" $2A CH
-"  00000001000010011111001000010000000" $2B CH
-"  00000000000000000000011000010001000" $2C CH
-"  00000000000000011111000000000000000" $2D CH
-"  00000000000000000000000000110001100" $2E CH
-"  00000000010001000100010001000000000" $2F CH
-"  01110100011001110101110011000101110" $30 CH
-"  00100011000010000100001000010001110" $31 CH
-"  01110100010000100010001000100011111" $32 CH
-"  11111000100010000010000011000101110" $33 CH
-"  00010001100101010010111110001000010" $34 CH
-"  11111100001111000001000011000101110" $35 CH
-"  00110010001000011110100011000101110" $36 CH
-"  11111100010000100010001000010000100" $37 CH
-"  01110100011000101110100011000101110" $38 CH
-"  01110100011000101111000010001001100" $39 CH
-"  00000011000110000000011000110000000" $3A CH
-"  00000011000110000000011000010001000" $3B CH
-"  00010001000100010000010000010000010" $3C CH
-"  00000000001111111111000000000000000" $3D CH
-"  01000001000001000001000100010001000" $3E CH
-"  01110100010000100010001000000000100" $3F CH
-
-\ "  01110100010000101101101011010101110" $40 CH
-"  01110101011010110110100001000101110" $40 CH
-"  01110100011000110001111111000110001" $41 CH
-"  11110100011000111110100011000111110" $42 CH
-"  01110100011000010000100001000101110" $43 CH
-"  11100100101000110001100011001011100" $44 CH
-"  11111100001000011110100001000011111" $45 CH
-"  11111100001000011110100001000010000" $46 CH
-"  01110100011000010111100011000101111" $47 CH
-"  10001100011000111111100011000110001" $48 CH
-"  01110001000010000100001000010001110" $49 CH
-"  00111000100001000010000101001001100" $4A CH
-"  10001100101010011000101001001010001" $4B CH
-"  10000100001000010000100001000011111" $4C CH
-"  10001110111010110101100011000110001" $4D CH
-"  10001100011100110101100111000110001" $4E CH
-"  01110100011000110001100011000101110" $4F CH
-"  11110100011000111110100001000010000" $50 CH
-"  01110100011000110001101011001001101" $51 CH
-"  11110100011000111110101001001010001" $52 CH
-"  01111100001000001110000010000111110" $53 CH
-"  11111001000010000100001000010000100" $54 CH
-"  10001100011000110001100011000101110" $55 CH
-"  10001100011000110001100010101000100" $56 CH
-"  10001100011000110101101011010101010" $57 CH
-"  10001100010101000100010101000110001" $58 CH
-"  10001100011000101010001000010000100" $59 CH
-"  11111000010001000100010001000011111" $5A CH
-"  11100100001000010000100001000011100" $5B CH
-"  10000100000100000100000100000100001" $5C CH
-"  00111000010000100001000010000100111" $5D CH
-"  00100010101000100000000000000000000" $5E CH
-"  00000000000000000000000000000011111" $5F CH
-\ $60..$7f
-"  01000001000001000000000000000000000" $60 CH
-"  00000000000111000001011111000101110" $61 CH
-"  10000100001011011001100011000111110" $62 CH
-"  00000000000111010000100001000101110" $63 CH
-"  00001000010110110011100011000101111" $64 CH
-"  00000000000111010001111111000001110" $65 CH
-"  00110010010100011110010000100001000" $66 CH
-"  00000011111000110001011110000101110" $67 CH
-"  10000100001011011001100011000110001" $68 CH
-"  00100000000110000100001000010001110" $69 CH
-"  00010000000001000010000101001001100" $6A CH
-"  10000100001001010100110001010010010" $6B CH
-
-"  00000011000010000100001000010001110" $6C CH
-"  00000000000101010101101011010110101" $6D CH
-"  00000000001011010001100011000110001" $6E CH
-"  00000000000011001001010010100100110" $6F CH
-"  00000000001011011001100011111010000" $70 CH
-"  00000000000110110011011110000100001" $71 CH
-"  00000000001011011001100001000010000" $72 CH
-"  00000000000111010000011100000111110" $73 CH
-"  00000001000111100100001000010000010" $74 CH
-"  00000000001000110001100011000101110" $75 CH
-"  00000000001000110001010100101000100" $76 CH
-"  00000000001010110101101011010101010" $77 CH
-"  00000000001000101010001000101010001" $78 CH
-"  00000000001000110001010100010001100" $79 CH
-"  00000000001111100010001000100011111" $7A CH
-"  00110001000010011000001000010000110" $7B CH
-"  00100001000010000100001000010000100" $7C CH
-"  01100001000010000011001000010011100" $7D CH
-"  00000000000101010100000000000000000" $7E CH
-"  11111111111111111111111111111111111" $7F CH
-
-FORGET CH ( remove compile helper )
-
-: fibo ( n -- f )  	0 1 ROT FOR BOUNDS NEXT DROP ;
-
-: fibos  1 46 ADO CRLF I .AS" fibo(#~#) = " LAP I fibo  LAP .LAP ."  result = " .DECL 5 +LOOP ;
-
-{
-: FIB ( x -- y )
-	DUP 2 > IF DUP  1- FIB
-		   SWAP 2- FIB +  EXIT
-	     THEN
-	DROP 1
-	;
-
-}
-
-
-( SMART PINS )
-{
- %AAAA_BBBB_FFF_PPPPPPPPPPPPP_TT_MMMMM_0
-}
-
-\ ' 12-bit analog to digital to analog, 19.5k samples/second
-
-pub DAC ( bits -- )	%101000000000001000110 WRPIN |< WXPIN L ;
-
-pub ADC12
-	@PIN DUP 1+ PIN %100011000000000000000 WRPIN
-  	PIN %10000000000000000000000011000 WRPIN 4096 WXPIN L
-	;
-
-
-
-
-
-
-
-			*** PS/2 KEYBOARD ***
-
-long kbs
-0 |<	:= caps	--- caps lock
-1 |<	:= lsk	--- left shift key
-2 |<	:= rsk	--- right shift key
-3 |<	:= lck	--- left ctrl
-4 |<	:= rck	--- right ctrl
-5 |<	:= lak	--- left alt
-6 |<	:= rak	--- right alt
-
-2 longs kbk	--- sequence of KEY# codes - lsb = latest
-
-{
-$14	left ctrl
-$58	caps
-$12	LEFT SHIFT
-$59	RIGHT SHIFT
-$11	LEFT ALT
-$E0 11	RIHT ALT
-
-}
-256 TABLE kbtbl
-
---- receive PS/2 data from smartpin and right justify
-pri RXKB ( -- KEY# )		KBDAT PIN R IF RDPIN 23 >> ELSE 0 THEN >B ;
-
-pri MAKE?			kbk 1+ C@ $F0 <> ;
-pri KBRK			kbs MAKE? IF SET ELSE CLR THEN 0 ;
-
---- get KEY#ode but process and filter break codes
-pri KEY#@
-	RXKB DUP
-	IF DUP SWITCH kbk kbk 1+ 7 <CMOVE kbk C!	\ kbk @ 8<< OR kbk !
-	$14 CASE lck KBRK BREAK
-	$12 CASE lsk KBRK BREAK
-	$59 CASE rsk KBRK BREAK
-	$58 CASE MAKE? IF kbs C@ 1 XOR kbs C! THEN 0 BREAK
----	ignore break codes and keys          use key  else no key
-	kbk 1+ C@ $F0 <> kbk C@ $F0 <> AND IF kbk C@  ELSE 0 THEN
-	THEN
-	;
-
-12250 := kbb --- keyboard baud rate
-\ 11350 := kbb --- keyboard baud rate
-
---- setup P7 for PS/2 keyboard data
-pri !KB			KBDAT PIN 0 WRPIN F R IF 9 BIT kbb RXD H THEN ;
-
-pub KB	KEY:
---- select PS/2 keyboard in tandem with console as input
-pri KB@
----	KEY#ode + shift
-	KEY#@ kbs C@ 6 AND IF $80 + THEN
----	lookup      and apply shift if necessary
-	kbtbl + C@   DUP 'a' 'z' WITHIN kbs C@ 1& AND IF $20 - THEN
----	and trim if control pressed
-	lck kbs SET? IF $1F AND THEN
-	;
-
-pub CONKB		KEY: KB@ DUP 0= IF DROP CONKEY THEN ;
-pub CONVGA		EMIT: DUP CONEMIT VEMIT ;
-pub PC			CONKB CONVGA ;
-
-( configure TAQOZ to use VGA and PS/2 keyboard for its console - as well as the serial input )
-pub P2PC
-	!KB PC MAC CLS 100 INTON C! -C64 8 SPACES ." PARALLAX P2 TAQOZ PC " 8 SPACES
-	SD? IF MOUNT MAC ls THEN MAC
-	;
-
-
-{
---- TESTING WORDS
-: DKB		KEY: KB@ DROP CONKEY ;
-: L		kbk 4 + @ .L SPACE kbk @ .L ;
-}
-{
-16 bytes kbbuf
-byte kbw
-byte kbr
-: KBPOLL	KB@ ?DUP IF kbbuf kbw C@ >N + C! kbw C++ THEN ;
-: KBTASK	!KB kbw W~ BEGIN KBPOLL AGAIN ;
-: KB		KEY: kbr C@ >N kbw >N C@ <> IF kbr C@ >N kbbuf + C@ kbr C++ ELSE CONKEY THEN ;
-}
-
-
-pri KEY^				$80 +
-pri KEY#	( ascii KEY# -- )	>B kbtbl + C! ;
-( LOWER CASE )
-'a' $1C KEY#	'b' $32 KEY#	'c' $21 KEY#	'd' $23 KEY#
-'e' $24 KEY#	'f' $2B KEY#	'g' $34 KEY#	'h' $33 KEY#
-'i' $43 KEY#	'j' $3B KEY#	'k' $42 KEY#	'l' $4B KEY#
-'m' $3A KEY#	'n' $31 KEY#	'o' $44 KEY#	'p' $4D KEY#
-'q' $15 KEY#	'r' $2D KEY#	's' $1B KEY#	't' $2C KEY#
-'u' $3C KEY#	'v' $2A KEY#	'w' $1D KEY#	'x' $22 KEY#
-'y' $35 KEY#	'z' $1A KEY#
-( UPPER CASE )
- 'A' $1C KEY^	'B' $32 KEY^	'C' $21 KEY^	'D' $23 KEY^
- 'E' $24 KEY^	'F' $2B KEY^	'G' $34 KEY^	'H' $33 KEY^
- 'I' $43 KEY^	'J' $3B KEY^	'K' $42 KEY^	'L' $4B KEY^
- 'M' $3A KEY^	'N' $31 KEY^	'O' $44 KEY^	'P' $4D KEY^
- 'Q' $15 KEY^	'R' $2D KEY^	'S' $1B KEY^	'T' $2C KEY^
- 'U' $3C KEY^	'V' $2A KEY^	'W' $1D KEY^	'X' $22 KEY^
- 'Y' $35 KEY^	'Z' $1A KEY^
-( NUMBERS )
- '1' $16 KEY#	'2' $1E KEY#	'3' $26 KEY#	'4' $25 KEY#
- '5' $2E KEY#	'6' $36 KEY#	'7' $3D KEY#	'8' $3E KEY#
- '9' $46 KEY#	'0' $45 KEY#
-( SYMBOLS )
- '!' $16 KEY^	'@' $1E KEY^	'#' $26 KEY^	'$' $25 KEY^
- '%' $2E KEY^	'^' $36 KEY^	'&' $3D KEY^	'*' $3E KEY^
- '(' $46 KEY^	')' $45 KEY^	 '~' $0E KEY^	'`' $0E KEY#
- '-' $4E KEY#	'_' $4E KEY^	'=' $55 KEY# 	'+' $55 KEY^
- '[' $54 KEY#	'{' $54 KEY^	']' $5B KEY#	'}' $5B KEY^
- '\' $5D KEY#	'|' $5D KEY^	';' $4C KEY#	':' $4C KEY^
- ''' $52 KEY#	'"' $52 KEY^	',' $41 KEY#	'<' $41 KEY^
- '.' $49 KEY#	'>' $49 KEY^	'/' $4A KEY#	'?' $4A KEY^
-( CONTROLS )
- $0D $5A KEY#	$0D $5A KEY^	$20 $29 KEY#	$20 $29 KEY^
- $1B $76 KEY#	$08 $66 KEY#	$09 $0D KEY#	$09 $0D KEY^
-
- ( F1 to F12 )
- $F1 $05 KEY#	$F2 $06 KEY#	$F3 $04 KEY#	$F4 $0C KEY#
- $F5 $03 KEY#	$F6 $0B KEY#	$F7 $F3 KEY#	$F8 $0A KEY#
- $F9 $01 KEY#	$FA $09 KEY#	$FB $78 KEY#	$FC $07 KEY#
-
-
-( NUM PAD ) ( still needs to have num lock select function )
-$90 $7E KEY#	\ SCROLL
-$91 $77 KEY#	\ NUM LOCK
-'+' $79 KEY# \ NUM+
-'*' $7C KEY#	\ NUM*
-'-' $7B KEY# \ NUM-
-'.' $71 KEY#	\ NUM. DEL
-'0' $70 KEY#	\ NUM0 INS
-'1' $69 KEY#	\ NUM1 END
-'2' $72 KEY# \ NUM2 DOWN
-'3' $7A KEY# \ NUM3 PG DN
-'4' $6B KEY# \ NUM4 LEFT
-'5' $73 KEY# \ NUM5
-'6' $74 KEY# \ NUM6 RIGHT
-'7' $6C KEY#	\ NUM7 HOME
-'8' $75 KEY# \ NUM8 UP
-'9' $7D KEY# \ NUM9 PG UP
-
-
-{
-$E0 $1F 	\ LEFT WIN
-$E0 $27		\ RIGHT WIN
-$E0 $2F		\ LIST
-$E0 $5E		\ WAKE UP
-$E0 $3F		\ SLEEP
-$E0 $37		\ POWER
-$E0 $4A		\ NUM/
-$E0 $12		\ DOWN
-$E0 $14		\ RIGHT CTL
-$E0 $23		\ MUTE
-$E0 $34		\ PLAY
-$E0 $44		\ STOP
-}
-
-\ FORGET KEY^
-
---- define F12 key
-pub :FC		ls ;
-pub :FB		DIR ;
-pub :F5		" SPIDEY" VIEW$ ;
-pub :F6		" MCQUEEN" VIEW$ ;
-
-
-
-
-
-pub $= ( str1 str2 -- flg )
-	OVER LEN$ OVER LEN$ =
+	  IF DROP SFJID 1+ IF SFBU THEN SFJID 1+ .SUCCESS BREAK
+	MOUNTED?
 	IF
-	DUP LEN$
-	ADO C@++ IC@ <> IF DROP 0 LEAVE THEN LOOP
-	0<>
-	ELSE 2DROP FALSE
+	DUP " BIX" $= IF DROP BIX THEN
+	DUP " MBR" $=
+---	    Create MBR signature and          point to sector 1 as 64k file       then open sector 1
+	  IF ( backup to MBR )
+	    DROP 0 OPEN-SECTOR RWS " ProP"  @ $17C SD!
+	    1 $174 SD! 64KB $178 SD!
+---	    Use sector 1 in the hidden partition for the file
+	    FLUSH 1 OPEN-SECTOR
+---	    else open the specified filename
+	  ELSE FOPEN$
+	  THEN
+	@FILE
+	  IF ( backup to file - including hidden file )
+	    0 @FILE 64KB RW SDWRS
+\	    $100 $300 ADO 0 I SD! 4 +LOOP 1 FLUSH
+	    RO SDWR? .SUCCESS
+	  BREAK
 	THEN
+	0 .SUCCESS
 	;
 
---- TEMP DUMMY HEADERS FOR EASYNET TESTING ---
-
-: TIMEOUT	2DROP ;
-: TIMEOUT?	DROP 0 ;
-: ALARM		2DROP ;
-: CONIO		CON ;
-pre TIMER	[C] long ;
-pub .TIME	." 00:00:00" ;
-pub .DATE	." Wed Dec 26, 2018 " ;
-: .DT		.DATE .TIME ;
-: PLAIN ;
-: BOLD ;
-: CLKFREQ	CLKHZ ;
-: U.R		<# FOR # NEXT #> PRINT$ ;
-: EE@		@ ;
-: EE!		! ;
-ukey 2+		:= keypoll
-ukey 14 +	:= flags
-delim 4 +	:= uprompt
-delim 6 +	:= uaccept
-delim 16 +	:= unum
-
-: OK		IF ' NOP ELSE 0 THEN uaccept W! ;
-: ECHO		flags 1 ROT IF SET ELSE CLR THEN ;
-
-: NULLOUT	EMIT: DROP ;
-
-: PCB$	" P2D2" ;
+pub BU	" MBR" BACKUP$ ;
 
 
 
-pub .VMAP ( from for size -- )
-	2 REG C!
-	0 REG W~
-	ADO
-	0 REG W@ 64 // 0= IF black PEN CRLF I .L SPACE THEN 0 REG W++
-	0 I 2 REG C@ ADO I SDBUF SDRD seccrc W@ OR LOOP
-	IF blue PEN ELSE red PEN  THEN $7F EMIT
-	2 REG C@ +LOOP
-	black PEN
-	;
+mntd ~
 
+pub MAIN	' ?MOUNT keypoll W! ;
+\ AUTO MAIN
 
-
---- CONSOLE REDIRECT NESTING --- stacks and restores previous I/O device
-long ucon
-: [CON		uemit @ ucon ! CON ;
-: CON]		ucon @ uemit ! ;
-
-: V		." 190123-2350" ;
 
 END
+DEPTH 3 <> IF ."  STACK ERRORS " .S THEN !SP
+
+
+
+
