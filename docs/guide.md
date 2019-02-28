@@ -1,8 +1,11 @@
-# ARITHMETIC
-+ [\+](#+)
-+ [\-](#-)
+# INDEX
++ [ARITHMETIC](#ARITHMETIC)
++ [BOOLEAN](#BOOLEAN)
++ [STACK](#STACK)
 
-#### +
+# ARITHMETIC
+
+## +
 *( n1 n2 -- n3 )*
 
 Add top two stack items together and replace with result
@@ -11,7 +14,216 @@ Add top two stack items together and replace with result
 TAQOZ# 10 5 + . --- 15 ok
 ```
 
-####
+## 1+
+*( n1 -- n2 )*
+
+Increment n1
+
+```
+TAQOZ# 10 1+ . --- 11 ok
+```
+
+## 2+
+*( n1 -- n2 )*
+
+Add 2 to n1
+
+```
+TAQOZ# 10 2+ . --- 12 ok
+```
+
+## 4+
+*( n1 -- n2 )*
+
+Add 4 to n1
+
+```
+TAQOZ# 10 4+ . --- 14 ok
+```
+
+## -
+*( n1 n2 -- n3 )*
+
+Subtract n2 from n1
+
+```
+TAQOZ# 10 5 - . --- 5 ok
+```
+
+## 1-
+*( n1 -- n2 )*
+
+Decrement n1
+
+```
+TAQOZ# 10 1- . --- 9 ok
+```
+
+## 2-
+*( n1 -- n2 )*
+
+Subtract 2 from n1
+
+```
+TAQOZ# 10 2- . --- 8 ok
+```
+
+## *
+*( n1 n2 -- n3 )*
+
+Signed multiply n1 and n2 (32 bits result)
+Max 32 bits positive number : 2147483647
+
+```
+TAQOZ# 10 5 * . --- 50 ok
+```
+
+## 2*
+*( n1 -- n2 )*
+
+Multiply n1 by 2 (shift left one bit)
+
+```
+TAQOZ# 10 2* . --- 20 ok
+```
+
+## 4*
+*( n1 -- n2 )*
+
+Multiply n1 by 4 (shift left two bit)
+
+```
+TAQOZ# 10 4* . --- 40 ok
+```
+
+## W*
+*( n1 n2 -- n3 )*
+
+Unsigned 16bit * 16bit multiply -- 32bit result
+```
+TAQOZ# $1_FFFF 2  * . --- 262142 ok
+TAQOZ# $1_FFFF 2 W* . --- 131070 ok
+TAQOZ# $FFFF   2 W* . --- 131070 ok
+TAQOZ# 65535   2 w* . --- 131070 ok
+
+```
+
+## UM*
+*( u1 u2 -- ud. )*
+
+Unsigned 32bit * 32bit multiply -- 64bit result
+
+```
+TAQOZ# 1000000000 5 UM* .s ---
+ DATA STACK (2)
+1   $0000_0001   1
+2   $2A05_F200   705032704 ok
+
+```
+
+## /
+*( n1 n2 -- n3 )*
+
+Divide n1 by n2
+
+```
+TAQOZ# 10 5 / . --- 2 ok
+TAQOZ# 10 -5 / . --- -2 ok
+```
+
+## U/
+*( u1 u2 -- quot )*
+
+Unsigned divide u1 by u2
+
+```
+TAQOZ# -4 2 / . --- -2 ok
+TAQOZ# -4 2 / U. --- 4294967294 ok
+TAQOZ# -4 2 U/ . --- 2147483646 ok
+TAQOZ# -4 2 U/ U. --- 2147483646 ok
+```
+
+## //
+*( n1 n2 -- rem )*
+
+Remainder of n1 divided by n2
+
+```
+TAQOZ# 10 3 // . --- 1 ok
+```
+
+## U//
+*( n1 n2 -- rem quot )*
+
+Divide n1 by n2, return remainder and quotient
+
+```
+TAQOZ# 10 3 U// .S ---
+ DATA STACK (2)
+1   $0000_0003   3
+2   $0000_0001   1 ok
+```
+
+## UM//
+*( Dbl.dividend divisor -- remainder Dbl.quotient)*
+
+64 bits divide
+
+```
+TAQOZ# 1000000000 5 UM* .S ---
+ DATA STACK (2)
+1   $0000_0001   1
+2   $2A05_F200   705032704 ok
+TAQOZ# 5 UM// .S ---
+ DATA STACK (3)
+1   $0000_0000   0
+2   $3B9A_CA00   1000000000
+3   $0000_0000   0 ok
+```
+
+## */
+*( u1 u2 div1 -- res )*
+
+Multiply u1 and u2 and divide result by div1
+
+```
+TAQOZ# 10 5 2 */ . --- 25 ok
+```
+
+## SQRT
+*( d. -- sqrt )*
+
+Square root of 64 bits number d.
+
+```
+TAQOZ# 100 0 SQRT . --- 10 ok
+TAQOZ# 1000000000 1000 UM* SQRT . --- 1000000 ok
+TAQOZ# 1000000 1000000 UM* SQRT . --- 1000000 ok
+```
+
+## NEGATE
+*( n1 -- n2 )*
+
+equivalent to n2 = 0 - n1
+
+```
+TAQOZ# 10 NEGATE . --- -10 ok
+```
+
+# BOOLEAN
+
+## NOT
+*( n1 -- n2 )*
+
+bitwise invert n1 and replace with result n2
+
+```
+TAQOZ# $FFFF_0000 NOT .L --- $0000_FFFF ok
+TAQOZ# %1111 NOT .BIN --- %11111111111111111111111111110000 ok
+```
+
+
+# OTHER
 
 #### TASK
 ```
