@@ -1,6 +1,7 @@
 # INDEX
 + [ARITHMETIC](#ARITHMETIC)
-+ [BOOLEAN](#BOOLEAN)
++ [BITWISE](#BITWISE)
++ [SHIFT](#SHIFT)
 + [STACK](#STACK)
 
 # ARITHMETIC
@@ -210,7 +211,7 @@ equivalent to n2 = 0 - n1
 TAQOZ# 10 NEGATE . --- -10 ok
 ```
 
-# BOOLEAN
+# BITWISE
 
 ## NOT
 *( n1 -- n2 )*
@@ -222,6 +223,51 @@ TAQOZ# $FFFF_0000 NOT .L --- $0000_FFFF ok
 TAQOZ# %1111 NOT .BIN --- %11111111111111111111111111110000 ok
 ```
 
+## AND
+*( n1 n2 -- n3 )*
+
+bitwise n1 & n2 replace with result n3
+
+```
+TAQOZ# $AAAA_AAAA $0000_FFFF AND .L --- $0000_AAAA ok
+TAQOZ# $DEAD_BEEF -1 AND .L --- $DEAD_BEEF ok
+TAQOZ# $DEAD_BEEF 0  AND .L --- $0000_0000 ok
+```
+
+## ANDN
+*( n1 n2 -- n3 )*
+
+bitwise n1 & !n2 replace with result n3
+
+```
+TAQOZ# $AAAA_AAAA $0000_FFFF ANDN .L --- $AAAA_0000 ok
+TAQOZ# $DEAD_BEEF -1 ANDN .L --- $0000_0000 ok
+TAQOZ# $DEAD_BEEF 0  ANDN .L --- $DEAD_BEEF ok
+```
+
+## OR
+*( n1 n2 -- n3 )*
+
+bitwise n1 | n2 replace with result n3
+
+```
+TAQOZ# $AAAA_AAAA $0000_FFFF OR .L --- $AAAA_FFFF ok
+TAQOZ# $DEAD_BEEF -1 OR .L --- $FFFF_FFFF ok
+TAQOZ# $DEAD_BEEF 0  OR .L --- $DEAD_BEEF ok
+```
+
+## XOR
+*( n1 n2 -- n3 )*
+
+bitwise n1 ⊕ n2 replace with result n3
+
+```
+TAQOZ# $AAAA_AAAA $0000_FFFF XOR .L --- $AAAA_5555 ok
+TAQOZ# $AAAA_5555 -1 XOR .L --- $5555_AAAA ok
+TAQOZ# $AAAA_5555 0  XOR .L --- $AAAA_5555 ok
+```
+
+# SHIFT
 
 # OTHER
 
