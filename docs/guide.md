@@ -213,6 +213,16 @@ TAQOZ# 10 NEGATE . --- -10 ok
 
 # BITWISE
 
+## REV
+*( n1 -- n2 )*
+
+Reverse bits 0..31 --> 31..0
+
+```
+TAQOZ# $FFFF_0000 REV .L --- $0000_FFFF ok
+TAQOZ# %1111 REV .BIN --- %11110000000000000000000000000000 ok
+```
+
 ## NOT
 *( n1 -- n2 )*
 
@@ -268,6 +278,169 @@ TAQOZ# $AAAA_5555 0  XOR .L --- $AAAA_5555 ok
 ```
 
 # SHIFT
+
+## >>
+*( n1 cnt -- n2 )*
+
+Shift n1 right by count
+
+```
+TAQOZ# %1001_0000 4 >> .BIN --- %00000000000000000000000000001001 ok
+TAQOZ# $FF 8 >> .L --- $0000_0000 ok
+```
+
+## 16>>
+*( n1 -- n2 )*
+
+Shift n1 right by 16
+
+```
+TAQOZ# $FFFF_0000 16>> .L --- $0000_FFFF ok
+```
+
+## 9>>
+*( n1 -- n2 )*
+
+Shift n1 right by 9
+
+```
+TAQOZ# $0000_0200 9>> .L --- $0000_0001 ok
+```
+
+## 8>>
+*( n1 -- n2 )*
+
+Shift n1 right by 8
+
+```
+TAQOZ# $FF00_FF00 8>> .L --- $00FF_00FF ok
+```
+
+## 4/
+*( n1 -- n2 )*
+
+Shift n1 right by 2 (divide by 4)
+
+```
+TAQOZ# 16 4/ . --- 4 ok
+TAQOZ# $0C 4/ .B --- $03 ok
+```
+
+## 2/
+*( n1 -- n2 )*
+
+Shift n1 right by 1 (divide by 2)
+
+```
+TAQOZ# 100 2/ . --- 50 ok
+TAQOZ# $0001_0000 2/ .L --- $0000_8000 ok
+```
+
+## SAR
+*( n1 cnt -- n2 )*
+
+Shift n1 right by count, sign extend
+
+```
+TAQOZ# $8000_0000 15 SAR .L --- $FFFF_0000 ok
+TAQOZ# $8000_0000 15 >>  .L --- $0001_0000 ok
+TAQOZ# $4000_0000 14 SAR .L --- $0001_0000 ok
+TAQOZ# $4000_0000 14 >>  .L --- $0001_0000 ok
+TAQOZ# -20 1 SAR . --- -10 ok
+TAQOZ# -20 1 >>  . --- 2147483638 ok
+```
+
+## ROR
+*( n1 cnt -- n2 )*
+
+Rotate n1 right by count
+
+```
+TAQOZ# %1111 4 >>  .BIN --- %00000000000000000000000000000000 ok
+TAQOZ# %1111 4 ROR .BIN --- %11110000000000000000000000000000 ok
+TAQOZ# $ABCD_1234 32 ROR .L --- $ABCD_1234 ok
+```
+
+## ROR?
+*( n1 cnt -- n1|0 n2 )*
+
+Rotate n1 right by count
+if carry, return n1 and result
+if not carry, return 0 and result
+
+```
+TAQOZ# $FFFF 8 ROR? . SPACE .L --- 8 $FF00_00FF ok
+TAQOZ# $FF00 8 ROR? . SPACE .L --- 0 $0000_00FF ok
+```
+
+## <<
+*( n1 cnt -- n2 )*
+
+Shift n1 left by count
+
+```
+TAQOZ# %0000_1001 4 << .BIN --- %00000000000000000000000010010000 ok
+TAQOZ# $FF00_0000 8 << .L --- $0000_0000 ok
+```
+
+## 16<<
+*( n1 -- n2 )*
+
+Shift n1 left by 16
+
+```
+TAQOZ# $0000_FFFF 16<< .L --- $FFFF_0000 ok
+```
+
+## 9<<
+*( n1 -- n2 )*
+
+Shift n1 left by 9
+
+```
+TAQOZ# $0040_0000 9<< .L --- $8000_0000 ok
+```
+
+## 8<<
+*( n1 -- n2 )*
+
+Shift n1 left by 8
+
+```
+TAQOZ# $00FF_00FF 8<< .L --- $FF00_FF00 ok
+```
+
+## 4*
+*( n1 -- n2 )*
+
+Shift n1 left by 2 (multiply by 4)
+
+```
+TAQOZ# 4 4* . --- 16 ok
+TAQOZ# $03 4* .B --- $0C ok
+TAQOZ# $0C 4* .B --- $30 ok
+```
+
+## 2*
+*( n1 -- n2 )*
+
+Shift n1 left by 1 (multiply by 2)
+
+```
+TAQOZ# 50 2* . --- 100 ok
+TAQOZ# $0000_8000 2* .L --- $0001_0000 ok
+```
+
+## ROL
+*( n1 cnt -- n2 )*
+
+Rotate n1 left by count
+
+```
+TAQOZ# $FF00_0000 8 << .L --- $0000_0000 ok
+TAQOZ# $FF00_0000 8 ROL .L --- $0000_00FF ok
+TAQOZ# $ABCD_1234 32 ROL .L --- $ABCD_1234 ok
+```
 
 # OTHER
 
